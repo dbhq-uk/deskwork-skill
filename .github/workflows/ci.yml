@@ -1,0 +1,23 @@
+name: ci
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38  # v5.4.0
+        with:
+          python-version: "3.11"
+      - run: python3 -m pytest skills/deskwork/tests -q
+      - name: no em dashes
+        run: |
+          if grep -rInP '[\x{2014}\x{2013}]' --include='*.md' --include='*.py' .; then
+            echo "em or en dash found"; exit 1
+          fi
+      - name: no real identifiers in examples
+        run: |
+          if grep -rInE '[A-Z]{3,}-[0-9]{3,}' --include='*.md' .; then
+            echo "looks like a real ticket id"; exit 1
+          fi
