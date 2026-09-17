@@ -66,7 +66,7 @@ def mode_capture(args, cfg):
         sys.stderr.write(f"capture: {e}\n")
         return 1
 
-    # Search for similar issues first
+    # Search for similar issues first (read only, always safe)
     sys.stdout.write("Searching for similar issues...\n")
     similar = issues.search_similar(owner, repo, args.title)
     if similar:
@@ -75,13 +75,30 @@ def mode_capture(args, cfg):
             sys.stdout.write(f"  #{issue['number']}: {issue.get('title', '')}\n")
         sys.stdout.write("\n")
 
-    # Create the issue
+    # Prepare the issue body
     body = issues.body_for("Task")
-    ref = issues.create(owner, repo, args.title, body, args.issue_type, [])
-
+    labels = []
     if args.area:
-        # Add area label - in a real implementation we'd validate it exists
-        pass
+        labels.append(f"area:{args.area}")
+
+    # Check dry-run before any write
+    if args.dry_run:
+        sys.stdout.write(f"Would create issue:\n")
+        sys.stdout.write(f"  Title: {args.title}\n")
+        if args.issue_type:
+            sys.stdout.write(f"  Type: {args.issue_type}\n")
+        if labels:
+            sys.stdout.write(f"  Labels: {', '.join(labels)}\n")
+        sys.stdout.write(f"  Body:\n")
+        for line in body.split("\n"):
+            sys.stdout.write(f"    {line}\n")
+        sys.stdout.write(f"  Project: {cfg.project}\n")
+        sys.stdout.write(f"  Status: {cfg.triage_status}\n")
+        return 0
+
+    # Perform the actual writes
+    # Create the issue
+    ref = issues.create(owner, repo, args.title, body, args.issue_type, labels)
 
     # Get the NodeId for adding to the board
     try:
@@ -91,25 +108,24 @@ def mode_capture(args, cfg):
         return 1
 
     # Add to board
-    if not args.dry_run:
-        try:
-            board.add_item(cfg.project, node_id)
-        except board.MissingScope:
-            sys.stderr.write(
-                "Projects v2 needs the project scope, which this token does not have.\n"
-                "Run: gh auth refresh -s project\n"
-            )
-            return 1
+    try:
+        board.add_item(cfg.project, node_id)
+    except board.MissingScope:
+        sys.stderr.write(
+            "Projects v2 needs the project scope, which this token does not have.\n"
+            "Run: gh auth refresh -s project\n"
+        )
+        return 1
 
-        # Set status to triage
-        fields_dict = board.fields(cfg.project)
-        if "Status" in fields_dict:
-            status_field = fields_dict["Status"]
-            # Find the triage option
-            for option in status_field.get("options", []):
-                if option["name"] == cfg.triage_status:
-                    board.set_field(cfg.project, node_id, status_field["id"], option["id"])
-                    break
+    # Set status to triage
+    fields_dict = board.fields(cfg.project)
+    if "Status" in fields_dict:
+        status_field = fields_dict["Status"]
+        # Find the triage option
+        for option in status_field.get("options", []):
+            if option["name"] == cfg.triage_status:
+                board.set_field(cfg.project, node_id, status_field["id"], option["id"])
+                break
 
     sys.stdout.write(f"Created {ref}\n")
     return 0
@@ -250,20 +266,32 @@ def mode_init(args, cfg):
         sys.stderr.write(f"init: {e}\n")
         return 1
 
+    # Check dry-run before any writes
+    if args.dry_run:
+        sys.stdout.write("Would create:\n")
+        for label_name in cfg.area_labels:
+            sys.stdout.write(f"  label: {label_name}\n")
+        for field_name, field_options in [
+            ("Status", [cfg.triage_status] if cfg.triage_status else []),
+            ("Effort", cfg.effort),
+            ("Risk", cfg.risk),
+        ]:
+            if field_options:
+                sys.stdout.write(f"  field: {field_name} with options {field_options}\n")
+        sys.stdout.write("(dry run - nothing written)\n")
+        return 0
+
     created_count = 0
 
     # Create area labels
     for label_name in cfg.area_labels:
-        if args.dry_run:
-            sys.stdout.write(f"would create label: {label_name}\n")
-        else:
-            try:
-                if issues.ensure_label(owner, repo, label_name, "000000", ""):
-                    created_count += 1
-                    sys.stdout.write(f"created label: {label_name}\n")
-            except gh.GhError as e:
-                sys.stderr.write(f"init: failed to create label {label_name}: {e}\n")
-                return 1
+        try:
+            if issues.ensure_label(owner, repo, label_name, "000000", ""):
+                created_count += 1
+                sys.stdout.write(f"created label: {label_name}\n")
+        except gh.GhError as e:
+            sys.stderr.write(f"init: failed to create label {label_name}: {e}\n")
+            return 1
 
     # Create Projects v2 fields
     try:
@@ -273,22 +301,19 @@ def mode_init(args, cfg):
             ("Risk", cfg.risk),
         ]:
             if field_options:
-                if args.dry_run:
-                    sys.stdout.write(f"would create field: {field_name}\n")
-                else:
-                    try:
-                        board.ensure_field(cfg.project, field_name, field_options)
-                        created_count += 1
-                        sys.stdout.write(f"created field: {field_name}\n")
-                    except board.MissingScope:
-                        sys.stdout.write(
-                            "Projects v2 needs the project scope, which this token does not have.\n"
-                            "Run: gh auth refresh -s project\n"
-                        )
-                        return 1
-                    except gh.GhError as e:
-                        sys.stderr.write(f"init: failed to create field {field_name}: {e}\n")
-                        return 1
+                try:
+                    board.ensure_field(cfg.project, field_name, field_options)
+                    created_count += 1
+                    sys.stdout.write(f"created field: {field_name}\n")
+                except board.MissingScope:
+                    sys.stdout.write(
+                        "Projects v2 needs the project scope, which this token does not have.\n"
+                        "Run: gh auth refresh -s project\n"
+                    )
+                    return 1
+                except gh.GhError as e:
+                    sys.stderr.write(f"init: failed to create field {field_name}: {e}\n")
+                    return 1
     except board.MissingScope:
         sys.stdout.write(
             "Projects v2 needs the project scope, which this token does not have.\n"
@@ -296,9 +321,7 @@ def mode_init(args, cfg):
         )
         return 1
 
-    if args.dry_run:
-        sys.stdout.write("(dry run - nothing written)\n")
-    elif created_count > 0:
+    if created_count > 0:
         sys.stdout.write(f"init: created {created_count} items\n")
     else:
         sys.stdout.write("init: everything already configured\n")
@@ -344,25 +367,28 @@ def mode_intake(args, cfg):
         if ids.IssueNumber(issue_ref["number"]) not in on_board:
             to_add.append(issue_ref)
 
+    # Check dry-run before any writes
+    if args.dry_run:
+        sys.stdout.write(f"Would add {len(to_add)} issues to board:\n")
+        for issue_ref in to_add:
+            ref = ids.Ref(owner, repo, ids.IssueNumber(issue_ref["number"]))
+            sys.stdout.write(f"  {ref}\n")
+        return 0
+
     # Add them to the board
     added_count = 0
     for issue_ref in to_add:
         ref = ids.Ref(owner, repo, ids.IssueNumber(issue_ref["number"]))
         try:
             node_id = ids.node_id(ref)
-            if args.dry_run:
-                sys.stdout.write(f"would add {ref} to board\n")
-            else:
-                board.add_item(cfg.project, node_id)
-                added_count += 1
-                sys.stdout.write(f"added {ref}\n")
+            board.add_item(cfg.project, node_id)
+            added_count += 1
+            sys.stdout.write(f"added {ref}\n")
         except (ids.MismatchedIssue, gh.GhError) as e:
             sys.stderr.write(f"intake: failed to add {ref}: {e}\n")
             return 1
 
-    if args.dry_run:
-        sys.stdout.write(f"would add {len(to_add)} issues (dry run)\n")
-    elif added_count > 0:
+    if added_count > 0:
         sys.stdout.write(f"intake: added {added_count} issues\n")
     else:
         sys.stdout.write("intake: all issues already on board\n")
