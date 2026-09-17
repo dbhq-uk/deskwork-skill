@@ -34,17 +34,20 @@ def parse(body):
     section_text = parts[1]
     lines = section_text.split('\n')
 
-    # Find where the decision lines start (skip initial blank line and header)
-    start_idx = 0
-    for i, line in enumerate(lines):
-        if line.startswith('- '):
-            start_idx = i
-            break
+    # Lines to skip: the generated preamble and section headers
+    PREAMBLE = "**deskwork** is remembering these decisions, so it stops asking."
+    UNPARSEABLE_HEADER = "**The following lines were not recognised - keeping them unchanged:**"
 
-    for line in lines[start_idx:]:
+    for line in lines:
         if not line.strip():
+            # Skip blank lines
             continue
 
+        if line == PREAMBLE or line == UNPARSEABLE_HEADER:
+            # Skip generated headers
+            continue
+
+        # Try to match the pattern
         match = _LINE.match(line)
         if match:
             kind, owner, repo, number, note = match.groups()
@@ -56,8 +59,8 @@ def parse(body):
                 result.deliberate_edges.add(ref)
             if note:
                 result._notes[ref] = note
-        elif line.startswith('- '):
-            # A line that looks like a decision but doesn't match the pattern
+        else:
+            # Any line that doesn't match the pattern and isn't generated is preserved
             result.unparseable_lines.append(line)
 
     return result

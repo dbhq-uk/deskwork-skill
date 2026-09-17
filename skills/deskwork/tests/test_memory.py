@@ -54,3 +54,21 @@ def test_an_unparseable_line_survives_a_parse_and_render_cycle():
     assert unparseable_line in parsed.unparseable_lines
     rendered = memory.render(parsed)
     assert unparseable_line in rendered
+
+
+def test_all_human_content_survives_parse_and_render_including_notes_headings_and_free_text():
+    body = ("<!-- deskwork -->\n"
+            "- rejected: owner/repo#77 (agreed with Sam on Tuesday)\n"
+            "\n## somebody's own heading\n"
+            "free text nobody should lose\n")
+    parsed = memory.parse(body)
+    ref = ids.Ref("owner", "repo", ids.IssueNumber(77))
+    assert parsed.rejected_additions == {ref}
+    assert parsed._notes.get(ref) == "(agreed with Sam on Tuesday)"
+    assert "## somebody's own heading" in parsed.unparseable_lines
+    assert "free text nobody should lose" in parsed.unparseable_lines
+
+    rendered = memory.render(parsed)
+    assert "(agreed with Sam on Tuesday)" in rendered
+    assert "## somebody's own heading" in rendered
+    assert "free text nobody should lose" in rendered
