@@ -83,13 +83,13 @@ def mode_capture(args, cfg):
 
     # Check dry-run before any write
     if args.dry_run:
-        sys.stdout.write(f"Would create issue:\n")
+        sys.stdout.write("Would create issue:\n")
         sys.stdout.write(f"  Title: {args.title}\n")
         if args.issue_type:
             sys.stdout.write(f"  Type: {args.issue_type}\n")
         if labels:
             sys.stdout.write(f"  Labels: {', '.join(labels)}\n")
-        sys.stdout.write(f"  Body:\n")
+        sys.stdout.write("  Body:\n")
         for line in body.split("\n"):
             sys.stdout.write(f"    {line}\n")
         sys.stdout.write(f"  Project: {cfg.project}\n")

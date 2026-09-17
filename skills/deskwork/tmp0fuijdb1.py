@@ -4,10 +4,9 @@ import sys
 import tempfile
 sys.path.insert(0, 'scripts')
 
-import gh
 import config
 import deskwork
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 import argparse
 
 # Track writes
