@@ -13,7 +13,10 @@ class WriteNotConfirmed(Exception):
 
 
 def _ref_from_issue(issue):
-    owner, repo = issue["repository_url"].rsplit("/", 2)[-2:]
+    url = issue["repository_url"]
+    prefix, owner, repo = url.rsplit("/", 2)
+    if not prefix.endswith("/repos"):
+        raise ValueError(f"unexpected repository_url shape, expected .../repos/owner/repo: {url!r}")
     return ids.Ref(owner, repo, ids.IssueNumber(issue["number"]))
 
 
