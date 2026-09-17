@@ -1,6 +1,6 @@
 # Projects v2
 
-Projects v2 is GraphQL only - there is no REST equivalent. All interactions flow through `board.graphql()`, which wraps `gh graphql` and translates authentication errors into `MissingScope`.
+Projects v2 is GraphQL only - there is no REST equivalent. All interactions flow through four entry points: `board.fields()`, `board.items()`, `board.add_item()` and `board.set_field()`. Each wraps a GraphQL call and translates authentication errors into `MissingScope`.
 
 ## Identifiers
 
