@@ -136,6 +136,8 @@ python3 -m pytest skills/deskwork/tests -q
 
 The fixtures deliberately include the cases most likely to produce plausible wrong answers: a cross-repository dependency edge, an issue blocking three others, an issue whose blocker has closed, a cycle in the graph, and the database-ID trap that the type system in `ids.py` exists to prevent.
 
+**Honesty note:** No mode has ever been run against a live GitHub Project, because the `project` token scope is not granted on this machine. The logic is tested; the wiring against a real Projects v2 board is not. The code is there, the patterns are sound, but a first deployment should begin with `init` on a test repository and a human watching the board.
+
 ## What it does not do
 
 - **It does not close issues.** A pull request can carry `Closes #N`; GitHub closes it when a human merges.

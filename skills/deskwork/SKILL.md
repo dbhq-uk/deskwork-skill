@@ -47,16 +47,25 @@ The created issue lands on the board in Triage status. Never assigned. Never pri
 python3 "$CLAUDE_SKILL_DIR/scripts/deskwork.py" review --repo .
 ```
 
-This reads every open issue and its links, reports the graph, and lets an agent reason about what should block what. The agent proposes new edges; you review them; the agent writes them if you approve.
+This reads every open issue and its links and reports the graph. The script gathers and presents; the agent reasons about what should block what; you (the human) approve or reject; the script writes only after approval.
+
+**The division of labour is strict:**
+
+- **The script** - `review` - reads the board and prints it. Nothing else.
+- **The agent** - reasons about what should block what, citing the issues and what you are trying to accomplish.
+- **You** - approve proposed edges or reject them. You have the final say on precedence.
+- **The script** - writes the approved edges only. Each written edge records its reason in a comment.
+
+The order in the roadmap is reasoned, which is exactly why `roadmap.md` records the date, the issue count, and one line of reasoning per item. If you later disagree with that reasoning, you edit the edges (not the roadmap), and the next render reflects your change.
 
 **The flow:**
 
-1. Read the existing graph - every native `blocked-by` and `blocking` link on open issues.
+1. Run `review` to read the existing graph - every native `blocked-by` and `blocking` link on open issues.
 2. Read every open issue and any design file it links to.
 3. Reason about what blocks what.
-4. **Show proposed additions and wait.** The reasoning is how an edge is born; you have the final say.
-5. Show proposed removals and wait - edges that the issues no longer justify.
-6. Write on approval. Each written edge records its reason in a comment.
+4. **Show proposed additions and wait for approval.** The reasoning is how an edge is born.
+5. Show proposed removals and wait for approval.
+6. On approval, write the edges. If rejected, note it and do not re-propose the same edge.
 
 **Memory:**
 

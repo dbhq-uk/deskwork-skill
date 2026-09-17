@@ -47,7 +47,7 @@ def test_triage_is_listed_but_not_ordered():
 def test_no_em_dashes():
     # Escapes, not the literal characters: CI greps every file for them,
     # including this one, so a literal here fails the build it protects.
-    assert "—" not in build() and "–" not in build()
+    assert "\u2014" not in build() and "\u2013" not in build()
 
 
 def test_same_repo_and_cross_repo_in_one_document():

@@ -69,6 +69,24 @@ reconstructed from git and GitHub rather than cached.
 packages, no venv. This is why the config is TOML - `tomllib` is in the
 stdlib and no YAML parser is. Same line `buildwork` holds.
 
+## The three-identifier hazard
+
+**This is the project's central one.** One GitHub issue carries three different identifiers and none is interchangeable:
+
+| Identifier | Looks like | Used by |
+|---|---|---|
+| Issue number | `144` | humans, URLs, REST paths |
+| Database id | `3527190001` | dependencies API `issue_id` field |
+| GraphQL node id | `"I_kwDOAbc123"` | every Projects v2 mutation |
+
+**The hazard:** Pass an issue number where a database id belongs - `gh api .../issues/144/dependencies/blocked_by` with `issue_id: 144` - and GitHub silently links a different issue in a different repository. The call succeeds. Nothing downstream notices. This is why:
+
+- Every write resolves the number to a database ID first via `GET /repos/{owner}/{repo}/issues/{n}`.
+- No function takes an ambiguous integer - `IssueId` and `NodeId` are distinct Python types.
+- After a write, the edge is read back and confirmed to point where it was meant to.
+
+Anybody changing code that touches GitHub edges needs this on the page before they start.
+
 ## Conventions
 
 - Any path `SKILL.md` names goes through `${CLAUDE_SKILL_DIR}`, which Claude
