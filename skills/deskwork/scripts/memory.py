@@ -10,34 +10,78 @@ import gh
 import ids
 
 MARKER = "<!-- deskwork -->"
-_LINE = re.compile(r"^- (rejected|deliberate): ([\w.-]+)/([\w.-]+)#(\d+)$", re.M)
+_LINE = re.compile(r"^- (rejected|deliberate): ([\w.-]+)/([\w.-]+)#(\d+)(.*)$", re.M)
 
 
 @dataclass
 class Memory:
     rejected_additions: set = field(default_factory=set)
     deliberate_edges: set = field(default_factory=set)
+    _notes: dict = field(default_factory=dict)
+    unparseable_lines: list = field(default_factory=list)
 
 
 def parse(body):
     result = Memory()
     if not body or MARKER not in body:
         return result
-    for kind, owner, repo, number in _LINE.findall(body):
-        ref = ids.Ref(owner, repo, ids.IssueNumber(int(number)))
-        if kind == "rejected":
-            result.rejected_additions.add(ref)
-        else:
-            result.deliberate_edges.add(ref)
+
+    # Split at the marker to find the deskwork section
+    parts = body.split(MARKER, 1)
+    if len(parts) < 2:
+        return result
+
+    section_text = parts[1]
+    lines = section_text.split('\n')
+
+    # Find where the decision lines start (skip initial blank line and header)
+    start_idx = 0
+    for i, line in enumerate(lines):
+        if line.startswith('- '):
+            start_idx = i
+            break
+
+    for line in lines[start_idx:]:
+        if not line.strip():
+            continue
+
+        match = _LINE.match(line)
+        if match:
+            kind, owner, repo, number, note = match.groups()
+            ref = ids.Ref(owner, repo, ids.IssueNumber(int(number)))
+            note = note.strip()
+            if kind == "rejected":
+                result.rejected_additions.add(ref)
+            else:
+                result.deliberate_edges.add(ref)
+            if note:
+                result._notes[ref] = note
+        elif line.startswith('- '):
+            # A line that looks like a decision but doesn't match the pattern
+            result.unparseable_lines.append(line)
+
     return result
 
 
 def render(mem):
     lines = [MARKER, "", "**deskwork** is remembering these decisions, so it stops asking.", ""]
     for ref in sorted(mem.rejected_additions, key=str):
-        lines.append(f"- rejected: {ref}")
+        line = f"- rejected: {ref}"
+        if ref in mem._notes:
+            line += f" {mem._notes[ref]}"
+        lines.append(line)
     for ref in sorted(mem.deliberate_edges, key=str):
-        lines.append(f"- deliberate: {ref}")
+        line = f"- deliberate: {ref}"
+        if ref in mem._notes:
+            line += f" {mem._notes[ref]}"
+        lines.append(line)
+
+    # Preserve unparseable lines verbatim
+    if mem.unparseable_lines:
+        lines.append("")
+        lines.append("**The following lines were not recognised - keeping them unchanged:**")
+        lines.extend(mem.unparseable_lines)
+
     return "\n".join(lines)
 
 
