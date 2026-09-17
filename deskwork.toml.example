@@ -1,0 +1,13 @@
+enabled = true
+project = "PVT_kwDOABCD1234"
+designs = "docs/superpowers/specs/"
+roadmap = "roadmap.md"
+issue_types = ["Bug", "Feature", "Task"]
+
+[labels]
+area = ["website", "infra"]
+
+[fields]
+Status = "Triage"
+Effort = ["S", "M", "L", "XL"]
+Risk = ["low", "medium", "high"]
