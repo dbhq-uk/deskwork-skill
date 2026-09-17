@@ -23,6 +23,15 @@ class IssueId(int):
     """
 
 
+class NodeId(str):
+    """The GraphQL node id. What every Projects v2 mutation actually wants.
+
+    Never construct this by wrapping a bare string read from a variable or
+    response field. The only sanctioned source is node_id() and the node_id
+    field of a GitHub API response.
+    """
+
+
 class MismatchedIssue(Exception):
     """GitHub returned an issue that is not the one that was asked for."""
 
@@ -47,6 +56,16 @@ def require_id(value):
     return int(value)
 
 
+def require_node_id(value):
+    """Guard for every function that calls a Projects v2 mutation."""
+    if not isinstance(value, NodeId):
+        raise TypeError(
+            f"expected a NodeId (the GraphQL node id), got {type(value).__name__} "
+            f"{value}. Fetch it with ids.node_id() first."
+        )
+    return str(value)
+
+
 def resolve(ref):
     """Turn an issue number into its database id, checking what came back."""
     issue = gh.api(f"repos/{ref.owner}/{ref.repo}/issues/{int(ref.number)}")
@@ -55,3 +74,13 @@ def resolve(ref):
             f"asked for {ref}, GitHub returned number {issue['number']}"
         )
     return IssueId(issue["id"])
+
+
+def node_id(ref):
+    """Turn an issue number into its GraphQL node id, checking what came back."""
+    issue = gh.api(f"repos/{ref.owner}/{ref.repo}/issues/{int(ref.number)}")
+    if issue["number"] != int(ref.number):
+        raise MismatchedIssue(
+            f"asked for {ref}, GitHub returned number {issue['number']}"
+        )
+    return NodeId(issue["node_id"])
