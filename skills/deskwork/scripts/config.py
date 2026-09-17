@@ -30,7 +30,18 @@ def load(repo_root):
     path = repo_root / CONFIG_PATH
     if not path.exists():
         return None
-    data = tomllib.loads(path.read_text())
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError:
+        return None
+    if not resolved.is_relative_to(repo_root.resolve()):
+        return None
+    try:
+        data = tomllib.loads(path.read_text())
+    except tomllib.TOMLDecodeError as error:
+        raise ConfigError(f"{CONFIG_PATH}: not valid TOML ({error})") from error
+    except OSError as error:
+        raise ConfigError(f"{CONFIG_PATH}: cannot be read ({error})") from error
     if data.get("enabled") is not True:
         return None
 

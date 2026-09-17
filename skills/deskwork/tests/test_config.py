@@ -56,3 +56,49 @@ def test_a_project_title_is_rejected(tmp_path):
     with pytest.raises(config.ConfigError) as caught:
         config.load(root)
     assert "node id" in str(caught.value).lower()
+
+
+@pytest.mark.parametrize(
+    "enabled_value",
+    [
+        'enabled = "true"',
+        "enabled = 1",
+        'enabled = "yes"',
+        "enabled = [true]",
+        "enabled = 1.0",
+        'enabled = "True"',
+    ],
+)
+def test_only_literal_true_opens_gate(tmp_path, enabled_value):
+    root = write(tmp_path, GOOD.replace("enabled = true", enabled_value))
+    assert config.load(root) is None
+
+
+def test_malformed_toml_raises_config_error(tmp_path):
+    root = write(tmp_path, "enabled = true\nthis is not valid toml [[[")
+    with pytest.raises(config.ConfigError) as caught:
+        config.load(root)
+    assert "not valid TOML" in str(caught.value)
+
+
+def test_directory_in_place_of_file_raises_config_error(tmp_path):
+    (tmp_path / ".github").mkdir(exist_ok=True)
+    (tmp_path / ".github" / "deskwork.toml").mkdir(exist_ok=True)
+    with pytest.raises(config.ConfigError) as caught:
+        config.load(tmp_path)
+    assert "cannot be read" in str(caught.value)
+
+
+def test_symlink_outside_repo_root_means_no_config(tmp_path):
+    other_repo = tmp_path / "other"
+    other_repo.mkdir()
+    (other_repo / ".github").mkdir(exist_ok=True)
+    (other_repo / ".github" / "deskwork.toml").write_text(GOOD)
+
+    repo = tmp_path / "this"
+    repo.mkdir()
+    (repo / ".github").mkdir(exist_ok=True)
+    link = repo / ".github" / "deskwork.toml"
+    link.symlink_to(other_repo / ".github" / "deskwork.toml")
+
+    assert config.load(repo) is None
