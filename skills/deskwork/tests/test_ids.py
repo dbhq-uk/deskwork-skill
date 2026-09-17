@@ -14,6 +14,11 @@ def test_a_number_is_not_an_id():
         ids.require_id(ids.IssueNumber(144))
 
 
+def test_a_bare_int_is_not_an_id():
+    with pytest.raises(TypeError):
+        ids.require_id(144)
+
+
 def test_an_id_passes():
     assert ids.require_id(ids.IssueId(3527190001)) == 3527190001
 

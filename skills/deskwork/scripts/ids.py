@@ -15,7 +15,12 @@ class IssueNumber(int):
 
 
 class IssueId(int):
-    """The internal database id. What every dependencies call actually wants."""
+    """The internal database id. What every dependencies call actually wants.
+
+    Never construct this by wrapping an IssueNumber or a bare int read from
+    a variable or response field. The only sanctioned sources are resolve()
+    and the id field of a GitHub API response.
+    """
 
 
 class MismatchedIssue(Exception):
