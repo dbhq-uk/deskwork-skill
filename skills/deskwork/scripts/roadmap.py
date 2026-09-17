@@ -6,42 +6,46 @@ was made from, and why each ordering call was made.
 """
 
 
-def _format_ref(ref, home_owner=None, home_repo=None):
+def _parse_home(home):
+    """Parse home parameter into (owner, repo).
+
+    Accepts either a tuple/list of (owner, repo) or a string "owner/repo".
+    """
+    if isinstance(home, str):
+        owner, repo = home.split("/")
+        return (owner, repo)
+    return tuple(home)
+
+
+def _format_ref(ref, home_owner, home_repo):
     """Format a Ref for display in the roadmap.
 
-    If the Ref is from the home repository, render as #number.
-    If it is from a different repository, render as owner/repo#number.
-    This ensures a reader never has to guess which repository a number belongs to.
+    Same-repo references render as #number.
+    Cross-repo references render as owner/repo#number.
+    Per-reference formatting ensures adding a cross-repo blocker does not
+    change the format of every other issue, keeping diffs reviewable.
     """
-    if home_owner and home_repo and ref.owner == home_owner and ref.repo == home_repo:
+    if ref.owner == home_owner and ref.repo == home_repo:
         return f"#{int(ref.number)}"
     return str(ref)
 
 
-def _infer_home_repo(g):
-    """Infer the home repository from the graph.
+def render(g, titles, reasons, triage, generated, issue_count, home):
+    """Render a roadmap.
 
-    Returns (owner, repo) if all issues in the roadmap are from the same repo,
-    or (None, None) if there are cross-repo issues or no issues.
+    Args:
+        g: The dependency graph (Graph object)
+        titles: Dict mapping Ref to title string
+        reasons: Dict mapping Ref to reasoning string
+        triage: List of Ref objects in triage (unreviewed)
+        generated: datetime.date of when this was generated
+        issue_count: Total count of open issues
+        home: Home repository as tuple (owner, repo) or string "owner/repo"
+
+    Returns:
+        Complete markdown roadmap as a string
     """
-    if not g.edges:
-        return (None, None)
-
-    first_ref = next(iter(g.edges))
-    home_owner = first_ref.owner
-    home_repo = first_ref.repo
-
-    # Check if all refs are from the same repo
-    for ref in g.edges:
-        if ref.owner != home_owner or ref.repo != home_repo:
-            # Cross-repo references exist, use full format for all
-            return (None, None)
-
-    return (home_owner, home_repo)
-
-
-def render(g, titles, reasons, triage, generated, issue_count):
-    home_owner, home_repo = _infer_home_repo(g)
+    home_owner, home_repo = _parse_home(home)
 
     def fmt(ref):
         return _format_ref(ref, home_owner, home_repo)
