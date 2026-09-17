@@ -141,3 +141,64 @@ def test_body_for_defaults_to_task_sections_for_an_unknown_kind():
 def test_body_for_marks_a_missing_section_as_not_stated():
     body = issues.body_for("Task", context="Only context given.")
     assert "_not stated_" in body
+
+
+def test_list_open_filters_out_pull_requests(fake_gh):  # noqa: F811
+    fake_gh({
+        "api repos/owner/repo/issues --paginate --slurp":
+            {"stdout": '[[{"number":1,"title":"Issue 1","state":"open",'
+             '"labels":[],"node_id":"I_1"},'
+             '{"number":2,"title":"PR 2","state":"open","pull_request":{},'
+             '"labels":[],"node_id":"I_2"},'
+             '{"number":3,"title":"Issue 3","state":"open",'
+             '"labels":[],"node_id":"I_3"}]]'},
+    })
+    found = issues.list_open("owner", "repo")
+    assert len(found) == 2
+    assert found[0]["number"] == 1
+    assert found[1]["number"] == 3
+    assert all("pull_request" not in issue for issue in found)
+
+
+def test_list_open_handles_pagination(fake_gh):  # noqa: F811
+    # Pagination returns multiple pages as separate arrays within the outer array
+    fake_gh({
+        "api repos/owner/repo/issues --paginate --slurp":
+            {"stdout": '[[{"number":1,"title":"Issue 1","state":"open",'
+             '"labels":[],"node_id":"I_1"}],'
+             '[{"number":2,"title":"Issue 2","state":"open",'
+             '"labels":[],"node_id":"I_2"}]]'},
+    })
+    found = issues.list_open("owner", "repo")
+    assert len(found) == 2
+    assert found[0]["number"] == 1
+    assert found[1]["number"] == 2
+
+
+def test_list_open_returns_empty_list_when_no_issues(fake_gh):  # noqa: F811
+    fake_gh({
+        "api repos/owner/repo/issues --paginate --slurp":
+            {"stdout": '[]'},
+    })
+    found = issues.list_open("owner", "repo")
+    assert found == []
+
+
+def test_ensure_label_creates_label_if_not_present(fake_gh):  # noqa: F811
+    fake_gh({
+        "api repos/owner/repo/labels/area%3Ainfra":
+            {"exit": 1, "stdout": ""},  # Label does not exist
+        "api repos/owner/repo/labels -X POST --input -":
+            {"stdout": '{"name":"area:infra"}'},
+    })
+    created = issues.ensure_label("owner", "repo", "area:infra", "FF0000", "Infrastructure")
+    assert created is True
+
+
+def test_ensure_label_does_not_update_existing_label(fake_gh):  # noqa: F811
+    fake_gh({
+        "api repos/owner/repo/labels/area%3Ainfra":
+            {"stdout": '{"name":"area:infra","color":"FF0000"}'},
+    })
+    created = issues.ensure_label("owner", "repo", "area:infra", "00FF00", "Infrastructure")
+    assert created is False

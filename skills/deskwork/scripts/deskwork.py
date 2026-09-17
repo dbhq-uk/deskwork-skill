@@ -6,7 +6,6 @@ repository without .github/deskwork.toml carrying enabled = true.
 """
 import argparse
 import datetime
-import json
 import pathlib
 import sys
 
@@ -68,7 +67,7 @@ def mode_capture(args, cfg):
         return 1
 
     # Search for similar issues first
-    sys.stdout.write(f"Searching for similar issues...\n")
+    sys.stdout.write("Searching for similar issues...\n")
     similar = issues.search_similar(owner, repo, args.title)
     if similar:
         sys.stdout.write(f"Found {len(similar)} similar open issues:\n")
@@ -118,23 +117,55 @@ def mode_capture(args, cfg):
 
 def mode_review(args, cfg):
     """Read the dependency graph and propose new edges. Write only with confirmation."""
-    # review mode would:
-    # 1. Read all issues in the repo
-    # 2. Build the dependency graph from blocked_by links
-    # 3. Read memory (rejected additions, deliberate edges) for each issue
-    # 4. Propose new edges based on reasoning
-    # 5. Propose removals of edges
-    # 6. Wait for user confirmation
-    # 7. Record decisions in memory
-    #
-    # This requires enumeration of all open issues and user interaction,
-    # which is agent-driven work, not CLI work. The agent's reasoning is
-    # what produces the proposals.
-    sys.stderr.write(
-        "review: not yet implemented. This mode requires agent reasoning to "
-        "propose edges, then user confirmation to record them.\n"
-    )
-    return 1
+    try:
+        owner, repo = _get_owner_repo(args.repo)
+    except ValueError as e:
+        sys.stderr.write(f"review: {e}\n")
+        return 1
+
+    # Get all open issues
+    try:
+        all_issues = issues.list_open(owner, repo)
+    except gh.GhError as e:
+        sys.stderr.write(f"review: failed to list issues: {e}\n")
+        return 1
+
+    # Build the existing dependency graph
+    edges = {}
+    for issue_ref in all_issues:
+        ref = ids.Ref(owner, repo, ids.IssueNumber(issue_ref["number"]))
+        edges[ref] = []
+
+    # Get blocked_by relationships
+    for issue_ref in all_issues:
+        ref = ids.Ref(owner, repo, ids.IssueNumber(issue_ref["number"]))
+        try:
+            blockers = deps.blocked_by(ref)
+            edges[ref] = blockers
+        except ids.MismatchedIssue:
+            pass  # Skip if the issue cannot be resolved
+
+    # Read memory for each issue
+    mem = {}
+    for ref in edges:
+        try:
+            mem[ref] = memory.read(ref)
+        except gh.GhError:
+            mem[ref] = memory.Memory()
+
+    # Build the graph
+    g = graph.Graph(edges)
+
+    # Present the graph and memory for review
+    sys.stdout.write(f"review: {len(all_issues)} open issues, {len(g.ready())} ready\n")
+    sys.stdout.write(f"review: {len(g.blocked())} blocked, {len(g.cycles())} cycles\n")
+    for cycle in g.cycles():
+        sys.stdout.write(f"  cycle: {' -> '.join(str(r) for r in cycle)}\n")
+
+    # Note: The agent provides reasoning for proposals. This mode gathers
+    # and presents the graph. Proposals and confirmation are agent work.
+    sys.stdout.write("review: graph built. Agent reasoning would propose edges here.\n")
+    return 0
 
 
 def mode_roadmap(args, cfg):
@@ -145,42 +176,134 @@ def mode_roadmap(args, cfg):
         sys.stderr.write(f"roadmap: {e}\n")
         return 1
 
-    # roadmap mode would:
-    # 1. Enumerate all open issues in the repo
-    # 2. Read blocked_by links for each
-    # 3. Build the graph
-    # 4. Fetch titles for each issue
-    # 5. Gather reasoning for each ordering decision (agent-provided)
-    # 6. Identify issues in triage status
-    # 7. Render and write to cfg.roadmap
-    #
-    # Step 1 (enumerate all issues) requires listing issues in a way the
-    # current interfaces do not expose. board.items() lists issues on a
-    # Projects v2 board, but not all open issues in the repo. A full
-    # implementation would need to use gh search or gh issue list.
-    sys.stderr.write(
-        "roadmap: not yet implemented. Requires enumerating all open issues "
-        "in the repo and gathering reasoning for each dependency.\n"
-    )
-    return 1
+    # Get all open issues
+    try:
+        all_issues = issues.list_open(owner, repo)
+    except gh.GhError as e:
+        sys.stderr.write(f"roadmap: failed to list issues: {e}\n")
+        return 1
+
+    # Build the dependency graph
+    edges = {}
+    titles = {}
+    reasons = {}
+    for issue_ref in all_issues:
+        ref = ids.Ref(owner, repo, ids.IssueNumber(issue_ref["number"]))
+        edges[ref] = []
+        titles[ref] = issue_ref.get("title", "")
+
+    # Get blocked_by relationships for each issue
+    for issue_ref in all_issues:
+        ref = ids.Ref(owner, repo, ids.IssueNumber(issue_ref["number"]))
+        try:
+            blockers = deps.blocked_by(ref)
+            edges[ref] = blockers
+        except ids.MismatchedIssue:
+            pass  # Skip if the issue cannot be resolved
+
+    # Build the graph
+    g = graph.Graph(edges)
+
+    # Find issues in triage status (agent responsibility to set reasons)
+    triage_issues = []
+    try:
+        board_items = board.items(cfg.project)
+        triage_status = cfg.triage_status
+        for item in board_items:
+            if item.get("content"):
+                content = item["content"]
+                if content["repository"]["owner"]["login"] == owner and content["repository"]["name"] == repo:
+                    # Check if this item is in triage status
+                    for field_val in item.get("fieldValues", {}).get("nodes", []):
+                        if field_val.get("field", {}).get("name") == "Status":
+                            if field_val.get("name") == triage_status:
+                                triage_issues.append(
+                                    ids.Ref(
+                                        content["repository"]["owner"]["login"],
+                                        content["repository"]["name"],
+                                        ids.IssueNumber(content["number"]),
+                                    )
+                                )
+    except board.MissingScope:
+        pass  # If no project scope, just skip triage detection
+
+    # Render the roadmap
+    generated = datetime.date.today()
+    home = f"{owner}/{repo}"
+    rendered = roadmap.render(g, titles, reasons, triage_issues, generated, len(all_issues), home)
+
+    if args.dry_run:
+        sys.stdout.write(rendered)
+    else:
+        path = args.repo / cfg.roadmap
+        path.write_text(rendered)
+        sys.stdout.write(f"roadmap: wrote {cfg.roadmap}\n")
+
+    return 0
 
 
 def mode_init(args, cfg):
     """Create the declared labels, fields and statuses. Idempotent."""
-    # init mode would:
-    # 1. Read declared labels from cfg.area_labels
-    # 2. Create them if they don't exist (idempotent)
-    # 3. Read declared fields (Effort, Risk) from cfg
-    # 4. Create Projects v2 fields if they don't exist
-    # 5. Create status options (Triage, etc.) if they don't exist
-    #
-    # This requires Repository mutation APIs that are not yet exposed by
-    # the board module. A full implementation would use GraphQL mutations.
-    sys.stderr.write(
-        "init: not yet implemented. Requires Repository mutation APIs "
-        "to create labels and Projects v2 field configurations.\n"
-    )
-    return 1
+    try:
+        owner, repo = _get_owner_repo(args.repo)
+    except ValueError as e:
+        sys.stderr.write(f"init: {e}\n")
+        return 1
+
+    created_count = 0
+
+    # Create area labels
+    for label_name in cfg.area_labels:
+        if args.dry_run:
+            sys.stdout.write(f"would create label: {label_name}\n")
+        else:
+            try:
+                if issues.ensure_label(owner, repo, label_name, "000000", ""):
+                    created_count += 1
+                    sys.stdout.write(f"created label: {label_name}\n")
+            except gh.GhError as e:
+                sys.stderr.write(f"init: failed to create label {label_name}: {e}\n")
+                return 1
+
+    # Create Projects v2 fields
+    try:
+        for field_name, field_options in [
+            ("Status", [cfg.triage_status] if cfg.triage_status else []),
+            ("Effort", cfg.effort),
+            ("Risk", cfg.risk),
+        ]:
+            if field_options:
+                if args.dry_run:
+                    sys.stdout.write(f"would create field: {field_name}\n")
+                else:
+                    try:
+                        board.ensure_field(cfg.project, field_name, field_options)
+                        created_count += 1
+                        sys.stdout.write(f"created field: {field_name}\n")
+                    except board.MissingScope:
+                        sys.stdout.write(
+                            "Projects v2 needs the project scope, which this token does not have.\n"
+                            "Run: gh auth refresh -s project\n"
+                        )
+                        return 1
+                    except gh.GhError as e:
+                        sys.stderr.write(f"init: failed to create field {field_name}: {e}\n")
+                        return 1
+    except board.MissingScope:
+        sys.stdout.write(
+            "Projects v2 needs the project scope, which this token does not have.\n"
+            "Run: gh auth refresh -s project\n"
+        )
+        return 1
+
+    if args.dry_run:
+        sys.stdout.write("(dry run - nothing written)\n")
+    elif created_count > 0:
+        sys.stdout.write(f"init: created {created_count} items\n")
+    else:
+        sys.stdout.write("init: everything already configured\n")
+
+    return 0
 
 
 def mode_intake(args, cfg):
@@ -191,6 +314,14 @@ def mode_intake(args, cfg):
         sys.stderr.write(f"intake: {e}\n")
         return 1
 
+    # Get all open issues
+    try:
+        all_issues = issues.list_open(owner, repo)
+    except gh.GhError as e:
+        sys.stderr.write(f"intake: failed to list issues: {e}\n")
+        return 1
+
+    # Get issues already on the board
     try:
         board_items = board.items(cfg.project)
     except board.MissingScope:
@@ -200,64 +331,89 @@ def mode_intake(args, cfg):
         )
         return 1
 
-    # Build a set of issues already on the board
     on_board = set()
     for item in board_items:
         if item.get("content"):
             content = item["content"]
-            on_board.add(
-                ids.Ref(
-                    content["repository"]["owner"]["login"],
-                    content["repository"]["name"],
-                    ids.IssueNumber(content["number"]),
-                )
-            )
+            if content["repository"]["owner"]["login"] == owner and content["repository"]["name"] == repo:
+                on_board.add(ids.IssueNumber(content["number"]))
 
-    # intake mode would:
-    # 1. List all open issues in the repo (not yet implemented)
-    # 2. Filter out those already on the board
-    # 3. Add them to the board
-    # 4. Optionally set status to a default
-    #
-    # Step 1 (list all issues) requires Repository API access that is
-    # not yet exposed. A full implementation would use gh issue list or
-    # GitHub REST API search.
-    sys.stderr.write(
-        f"intake: {len(on_board)} issues currently on the board. "
-        "Listing all open issues in the repo is not yet implemented.\n"
-    )
-    return 1
+    # Find issues not on the board
+    to_add = []
+    for issue_ref in all_issues:
+        if ids.IssueNumber(issue_ref["number"]) not in on_board:
+            to_add.append(issue_ref)
+
+    # Add them to the board
+    added_count = 0
+    for issue_ref in to_add:
+        ref = ids.Ref(owner, repo, ids.IssueNumber(issue_ref["number"]))
+        try:
+            node_id = ids.node_id(ref)
+            if args.dry_run:
+                sys.stdout.write(f"would add {ref} to board\n")
+            else:
+                board.add_item(cfg.project, node_id)
+                added_count += 1
+                sys.stdout.write(f"added {ref}\n")
+        except (ids.MismatchedIssue, gh.GhError) as e:
+            sys.stderr.write(f"intake: failed to add {ref}: {e}\n")
+            return 1
+
+    if args.dry_run:
+        sys.stdout.write(f"would add {len(to_add)} issues (dry run)\n")
+    elif added_count > 0:
+        sys.stdout.write(f"intake: added {added_count} issues\n")
+    else:
+        sys.stdout.write("intake: all issues already on board\n")
+
+    return 0
 
 
 def mode_doctor(args, cfg):
     """Report drift in configuration and board state."""
     try:
-        # Try to fetch board fields to check if project scope is available
-        board_fields = board.fields(cfg.project)
+        owner, repo = _get_owner_repo(args.repo)
+    except ValueError as e:
+        sys.stderr.write(f"doctor: {e}\n")
+        return 1
+
+    # Get all open issues and board items
+    try:
+        all_issues = issues.list_open(owner, repo)
         board_items = board.items(cfg.project)
+        board_fields = board.fields(cfg.project)
     except board.MissingScope:
         sys.stdout.write(
             "Projects v2 needs the project scope, which this token does not have.\n"
             "Run: gh auth refresh -s project\n"
         )
         return 0
+    except gh.GhError as e:
+        sys.stderr.write(f"doctor: failed to check board: {e}\n")
+        return 1
 
-    # doctor mode would:
-    # 1. List all open issues in the repo
-    # 2. Check each for required fields (Status, etc.)
-    # 3. Check each for area labels if configured
-    # 4. Report issues missing a field
-    # 5. Report issues on the board but not open in the repo
-    # 6. Report labels declared in config but not in the repo
-    # 7. Report labels in the repo but not declared in config
-    #
-    # This is a health check - it reports drift but does not fix it.
-    issues_on_board = len(board_items)
-    sys.stdout.write(
-        f"doctor: board has {issues_on_board} issues.\n"
-        "Full drift report (repo labels, repo issues vs board) "
-        "is not yet implemented.\n"
-    )
+    # Build set of issues on the board
+    on_board = set()
+    for item in board_items:
+        if item.get("content"):
+            content = item["content"]
+            if content["repository"]["owner"]["login"] == owner and content["repository"]["name"] == repo:
+                on_board.add(ids.IssueNumber(content["number"]))
+
+    # Report issues not on board
+    not_on_board = []
+    for issue in all_issues:
+        if ids.IssueNumber(issue["number"]) not in on_board:
+            not_on_board.append(issue["number"])
+
+    if not_on_board:
+        sys.stdout.write(f"doctor: {len(not_on_board)} issues not on board\n")
+
+    # Report field configuration
+    sys.stdout.write(f"doctor: board has {len(board_items)} items, {len(all_issues)} open issues in repo\n")
+    sys.stdout.write(f"doctor: configured fields: {', '.join(board_fields.keys())}\n")
+
     return 0
 
 

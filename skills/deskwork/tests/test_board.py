@@ -96,3 +96,68 @@ def test_missing_scope_message_includes_fix():
     """Test that MissingScope messages are helpful."""
     exc = board.MissingScope("Projects v2 needs the project scope, which this token does not have. Run: gh auth refresh -s project")
     assert "gh auth refresh -s project" in str(exc)
+
+
+def test_ensure_field_returns_existing_field(monkeypatch):
+    """ensure_field is idempotent - returns existing field without creation."""
+    def mock_graphql(query, **variables):
+        # Only fields query, no mutation
+        if "createProjectV2Field" not in query:
+            return {
+                "node": {
+                    "fields": {
+                        "nodes": [
+                            {
+                                "id": "PVTF_existing",
+                                "name": "Status",
+                                "options": [
+                                    {"id": "opt1", "name": "Todo"},
+                                    {"id": "opt2", "name": "Done"}
+                                ]
+                            }
+                        ]
+                    }
+                }
+            }
+        raise AssertionError("ensure_field should not call create if field exists")
+    monkeypatch.setattr(gh, "graphql", mock_graphql)
+    result = board.ensure_field("PVT_x", "Status", ["Todo", "Done"])
+    assert result["name"] == "Status"
+    assert result["id"] == "PVTF_existing"
+
+
+def test_ensure_field_creates_field_if_missing(monkeypatch):
+    """ensure_field creates a field if it does not exist."""
+    call_count = [0]
+
+    def mock_graphql(query, **variables):
+        call_count[0] += 1
+        if "createProjectV2Field" in query:
+            # Mutation call
+            return {
+                "createProjectV2Field": {
+                    "field": {
+                        "id": "PVTF_new",
+                        "name": "Status",
+                        "__typename": "ProjectV2SingleSelectField",
+                        "options": [
+                            {"id": "opt1", "name": "Todo"},
+                            {"id": "opt2", "name": "Done"}
+                        ]
+                    }
+                }
+            }
+        else:
+            # Query call to check existing fields
+            return {
+                "node": {
+                    "fields": {
+                        "nodes": []  # No fields exist
+                    }
+                }
+            }
+    monkeypatch.setattr(gh, "graphql", mock_graphql)
+    result = board.ensure_field("PVT_x", "Status", ["Todo", "Done"])
+    assert result["name"] == "Status"
+    assert result["id"] == "PVTF_new"
+    assert call_count[0] == 2  # One query, one mutation

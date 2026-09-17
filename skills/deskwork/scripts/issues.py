@@ -100,3 +100,46 @@ def create(owner, repo, title, body, issue_type, labels):
         payload["type"] = issue_type
     created = gh.api(f"repos/{owner}/{repo}/issues", method="POST", body=payload)
     return ids.Ref(owner, repo, ids.IssueNumber(created["number"]))
+
+
+def list_open(owner, repo):
+    """List all open issues in a repository, paginated and filtered.
+
+    Returns a list of dicts with at least number, title, state, labels and
+    node_id. Pull requests are filtered out (identified by the pull_request
+    key). Pagination is handled transparently.
+    """
+    path = f"repos/{owner}/{repo}/issues"
+    # Use --paginate --slurp to get all pages as a single array
+    data = gh.api(path, extra_args=["--paginate", "--slurp"])
+    if not data:
+        return []
+
+    # Flatten the pages array into a single list of issues
+    issues_list = []
+    for page in data:
+        if isinstance(page, list):
+            issues_list.extend(page)
+        else:
+            issues_list.append(page)
+
+    # Filter out pull requests - any entry with a pull_request key is a PR
+    return [issue for issue in issues_list if "pull_request" not in issue]
+
+
+def ensure_label(owner, repo, name, colour, description):
+    """Create a label if it does not exist. Idempotent.
+
+    If the label already exists, it is left untouched rather than updated.
+    Returns True if the label was created, False if it already existed.
+    """
+    # Try to get the label first
+    try:
+        gh.api(f"repos/{owner}/{repo}/labels/{urllib.parse.quote(name, safe='')}")
+        # Label exists, do nothing
+        return False
+    except gh.GhError:
+        # Label does not exist, create it
+        payload = {"name": name, "color": colour, "description": description}
+        gh.api(f"repos/{owner}/{repo}/labels", method="POST", body=payload)
+        return True

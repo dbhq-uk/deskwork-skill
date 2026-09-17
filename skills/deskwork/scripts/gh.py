@@ -40,11 +40,13 @@ def _pace():
     _last_write = time.monotonic()
 
 
-def api(path, method="GET", body=None):
+def api(path, method="GET", body=None, extra_args=None):
     args = ["api", path]
     if method != "GET":
         _pace()
         args += ["-X", method]
+    if extra_args:
+        args.extend(extra_args)
     if body is not None:
         args += ["--input", "-"]
         out = _exec(args, stdin_data=json.dumps(body))

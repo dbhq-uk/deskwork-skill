@@ -77,3 +77,36 @@ def set_field(project_id, item_id, field_id, option_id):
       }) { projectV2Item { id } }
     }"""
     _graphql(query, project=project_id, item=item_id, field=field_id, option=option_id)
+
+
+def ensure_field(project_id, name, options):
+    """Create a single-select field if it does not exist. Idempotent.
+
+    If the field already exists, it is returned untouched. Returns the field
+    dict with id, name, and options.
+    """
+    # Check if the field already exists
+    all_fields = fields(project_id)
+    if name in all_fields:
+        return all_fields[name]
+
+    # Field does not exist, create it
+    query = """
+    mutation($project: ID!, $name: String!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
+      createProjectV2Field(input: {
+        projectId: $project, dataType: SINGLE_SELECT, name: $name,
+        singleSelectOptions: $options
+      }) { field {
+        __typename id name
+        ... on ProjectV2SingleSelectField { options { id name } }
+      } }
+    }"""
+    # Convert options list of strings to the mutation format
+    option_inputs = [{"name": opt} for opt in options]
+    data = _graphql(query, project=project_id, name=name, options=option_inputs)
+    field = data["createProjectV2Field"]["field"]
+    return {
+        "name": field["name"],
+        "id": field["id"],
+        "options": field.get("options", []),
+    }
