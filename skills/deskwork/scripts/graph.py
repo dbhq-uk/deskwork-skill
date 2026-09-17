@@ -11,6 +11,7 @@ class Graph:
         self.edges = {
             node: {b for b in blockers if b not in self.closed}
             for node, blockers in edges.items()
+            if node not in self.closed
         }
         for blockers in list(self.edges.values()):
             for blocker in blockers:
@@ -34,7 +35,7 @@ class Graph:
             for blocker in blockers:
                 counts[blocker] = counts.get(blocker, 0) + 1
         found = [(n, c) for n, c in counts.items() if c >= threshold]
-        return sorted(found, key=lambda pair: (-pair[1], int(pair[0].number)))
+        return sorted(found, key=lambda pair: (-pair[1], pair[0].owner, pair[0].repo, int(pair[0].number)))
 
     def cycles(self):
         """Tarjan's strongly connected components. Any component above one node
@@ -71,4 +72,8 @@ class Graph:
         for node in self.edges:
             if node not in index:
                 visit(node)
-        return found
+        sorted_components = [
+            sorted(c, key=lambda r: (r.owner, r.repo, int(r.number)))
+            for c in found
+        ]
+        return sorted(sorted_components, key=lambda c: (c[0].owner, c[0].repo, int(c[0].number)))
