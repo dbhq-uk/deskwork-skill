@@ -37,3 +37,21 @@ def test_api_raises_on_failure(fake_gh):
     fake_gh({"api repos/owner/repo/issues/9": {"stdout": "", "exit": 1}})
     with pytest.raises(gh.GhError):
         gh.api("repos/owner/repo/issues/9")
+
+
+def test_graphql_renders_bool_and_none_variables(fake_gh, monkeypatch):
+    monkeypatch.setattr(gh, "_last_write", 0.0)
+    fake_gh({
+        "api graphql -f query=mutation -F flag=true -F note=null": {
+            "stdout": '{"data": {"ok": true}}'
+        }
+    })
+    assert gh.graphql("mutation", flag=True, note=None) == {"ok": True}
+
+
+def test_graphql_paces_writes(fake_gh, monkeypatch):
+    paced = []
+    monkeypatch.setattr(gh, "_pace", lambda: paced.append(True))
+    fake_gh({"api graphql -f query=mutation": {"stdout": '{"data": {"ok": true}}'}})
+    gh.graphql("mutation")
+    assert paced == [True]
