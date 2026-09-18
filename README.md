@@ -213,6 +213,7 @@ itself is [dbhq-uk/marketplace](https://github.com/dbhq-uk/marketplace) - one
 | [pennyblack](https://skills.dbhq.uk/pennyblack/) | A physical letter, posted from the terminal |
 | [buildwork](https://skills.dbhq.uk/buildwork/) | Your open issues, run as parallel agents |
 | [groupwork](https://skills.dbhq.uk/groupwork/) | A second agent on the work, adversary or partner |
+| [headwork](https://skills.dbhq.uk/headwork/) | One decision at a time, with a recommendation |
 
 Plus [heliograph](https://skills.dbhq.uk/heliograph/), for a machine you cannot log into.
 
