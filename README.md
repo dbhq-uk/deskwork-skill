@@ -20,7 +20,7 @@ File what an agent notices as tracked work on GitHub - and keep a roadmap in git
 
 An agent skill for [Claude Code](https://code.claude.com) and [Codex](https://developers.openai.com/codex/cli). File a side issue mid-task without stopping, link designs to the issues that track them, reason about work order, and render a roadmap from the dependency graph.
 
-## The problem it solves
+## What makes it different
 
 Three things happen in most agent workflows and none of them survives the session:
 
@@ -62,6 +62,11 @@ same install two ways: Claude Code substitutes `${CLAUDE_SKILL_DIR}`, so the
 whole skill directory is symlinked untouched, while Codex does not, so its
 `SKILL.md` is rewritten at install time. Re-run the Codex one after editing
 `SKILL.md`.
+
+## Requirements
+
+Python 3, standard library only. `git`, and `gh` authenticated - every verb
+here reads or writes GitHub issues.
 
 ## Opt in, per repository
 
