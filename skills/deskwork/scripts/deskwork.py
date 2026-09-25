@@ -17,41 +17,10 @@ import graph
 import ids
 import issues
 import memory
+import repo
 import roadmap
 
 MODES = ("capture", "review", "roadmap", "init", "intake", "doctor")
-
-
-def _get_owner_repo(repo_path):
-    """Extract owner/repo from git remote origin.
-
-    Returns (owner, repo) tuple, raises ValueError if not a git repo or
-    cannot determine remote.
-    """
-    git_dir = repo_path / ".git"
-    if not git_dir.exists():
-        raise ValueError(f"{repo_path} is not a git repository")
-
-    config_path = git_dir / "config"
-    if not config_path.exists():
-        raise ValueError(f"cannot read git config at {config_path}")
-
-    content = config_path.read_text()
-    for line in content.split("\n"):
-        if "url =" in line and "github.com" in line:
-            url = line.split("=", 1)[1].strip()
-            # Parse git@github.com:owner/repo.git or https://github.com/owner/repo.git
-            if "github.com" in url:
-                if url.endswith(".git"):
-                    url = url[:-4]
-                if ":" in url:
-                    # ssh format
-                    url = url.split(":", 1)[1]
-                # Extract owner/repo
-                parts = url.split("/")
-                if len(parts) >= 2:
-                    return (parts[-2], parts[-1])
-    raise ValueError(f"cannot determine GitHub owner/repo from {repo_path}")
 
 
 def mode_capture(args, cfg):
@@ -60,11 +29,7 @@ def mode_capture(args, cfg):
         sys.stderr.write("capture: --title is required\n")
         return 1
 
-    try:
-        owner, repo = _get_owner_repo(args.repo)
-    except ValueError as e:
-        sys.stderr.write(f"capture: {e}\n")
-        return 1
+    owner, repo = args.owner, args.name
 
     # Search for similar issues first (read only, always safe)
     sys.stdout.write("Searching for similar issues...\n")
@@ -133,11 +98,7 @@ def mode_capture(args, cfg):
 
 def mode_review(args, cfg):
     """Read the dependency graph and propose new edges. Write only with confirmation."""
-    try:
-        owner, repo = _get_owner_repo(args.repo)
-    except ValueError as e:
-        sys.stderr.write(f"review: {e}\n")
-        return 1
+    owner, repo = args.owner, args.name
 
     # Get all open issues
     try:
@@ -186,11 +147,7 @@ def mode_review(args, cfg):
 
 def mode_roadmap(args, cfg):
     """Build the dependency graph and render the roadmap."""
-    try:
-        owner, repo = _get_owner_repo(args.repo)
-    except ValueError as e:
-        sys.stderr.write(f"roadmap: {e}\n")
-        return 1
+    owner, repo = args.owner, args.name
 
     # Get all open issues
     try:
@@ -251,7 +208,7 @@ def mode_roadmap(args, cfg):
     if args.dry_run:
         sys.stdout.write(rendered)
     else:
-        path = args.repo / cfg.roadmap
+        path = args.root / cfg.roadmap
         path.write_text(rendered)
         sys.stdout.write(f"roadmap: wrote {cfg.roadmap}\n")
 
@@ -260,11 +217,7 @@ def mode_roadmap(args, cfg):
 
 def mode_init(args, cfg):
     """Create the declared labels, fields and statuses. Idempotent."""
-    try:
-        owner, repo = _get_owner_repo(args.repo)
-    except ValueError as e:
-        sys.stderr.write(f"init: {e}\n")
-        return 1
+    owner, repo = args.owner, args.name
 
     # Check dry-run before any writes
     if args.dry_run:
@@ -331,11 +284,7 @@ def mode_init(args, cfg):
 
 def mode_intake(args, cfg):
     """Add existing issues that are not on the board."""
-    try:
-        owner, repo = _get_owner_repo(args.repo)
-    except ValueError as e:
-        sys.stderr.write(f"intake: {e}\n")
-        return 1
+    owner, repo = args.owner, args.name
 
     # Get all open issues
     try:
@@ -398,11 +347,7 @@ def mode_intake(args, cfg):
 
 def mode_doctor(args, cfg):
     """Report drift in configuration and board state."""
-    try:
-        owner, repo = _get_owner_repo(args.repo)
-    except ValueError as e:
-        sys.stderr.write(f"doctor: {e}\n")
-        return 1
+    owner, repo = args.owner, args.name
 
     # Get all open issues and board items
     try:
@@ -454,7 +399,13 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     try:
-        cfg = config.load(args.repo)
+        args.root = repo.root(args.repo)
+    except repo.NotARepo as error:
+        sys.stderr.write(f"deskwork: {error}\n")
+        return 1
+
+    try:
+        cfg = config.load(args.root)
     except config.ConfigError as error:
         # The file is there and it is wrong. A different exit code from the
         # gate, because this one is a mistake to fix rather than a repository
@@ -463,11 +414,21 @@ def main(argv=None):
         return 3
     if cfg is None:
         sys.stderr.write(
-            f"deskwork: {args.repo}/.github/deskwork.toml is missing, or does not "
+            f"deskwork: {args.root}/{config.CONFIG_PATH} is missing, or does not "
             "carry enabled = true. deskwork does nothing in a repository that has "
             "not opted in.\n"
         )
         return 2
+
+    try:
+        gh.require_version()
+        args.owner, args.name = repo.name_with_owner(args.root)
+    except gh.TooOld as error:
+        sys.stderr.write(f"deskwork: {error}\n")
+        return 1
+    except (gh.GhError, ValueError) as error:
+        sys.stderr.write(f"deskwork: cannot tell which GitHub repository this is: {error}\n")
+        return 1
 
     return globals()[f"mode_{args.mode}"](args, cfg)
 

@@ -65,8 +65,9 @@ whole skill directory is symlinked untouched, while Codex does not, so its
 
 ## Requirements
 
-Python 3, standard library only. `git`, and `gh` authenticated - every verb
-here reads or writes GitHub issues.
+Python 3.11 or later, standard library only. `git`, and `gh` 2.94 or later,
+authenticated - every verb here reads or writes GitHub issues. Both installers
+and every mode refuse an older `gh`.
 
 ## Opt in, per repository
 
@@ -80,7 +81,7 @@ Full field reference: [`skills/deskwork/references/projects-v2.md`](skills/deskw
 
 ## The six modes
 
-All require the working directory to be inside a git repository with `deskwork.toml` present and `enabled = true`.
+All require the working directory to be inside a git repository with `deskwork.toml` present and `enabled = true`. Any directory in the repository works, including a subdirectory or a git worktree. Issues go to the repository the `origin` remote points at.
 
 ### capture - file a new issue
 

@@ -8,7 +8,6 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 import board  # noqa: E402
 import gh  # noqa: E402
 import ids  # noqa: E402
-from test_gh import fake_gh  # noqa: E402,F401
 
 
 def test_add_item_requires_a_node_id():
@@ -21,7 +20,7 @@ def test_add_item_refuses_an_issue_id():
         board.add_item("PVT_x", ids.IssueId(3527190001))
 
 
-def test_missing_project_scope_is_reported_plainly(fake_gh, monkeypatch):  # noqa: F811
+def test_missing_project_scope_is_reported_plainly(fake_gh, monkeypatch):
     def boom(*args, **kwargs):
         raise gh.GhError("your authentication token is missing required scopes [read:project]")
     monkeypatch.setattr(gh, "graphql", boom)

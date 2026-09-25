@@ -21,6 +21,23 @@ MISSING=""
 command -v git >/dev/null 2>&1 || MISSING="$MISSING git"
 command -v gh >/dev/null 2>&1  || MISSING="$MISSING gh"
 
+# gh 2.94 added the flags deskwork is built on: --type, --parent and
+# --blocked-by on issue create, and --add-blocked-by on issue edit. An older
+# gh fails on the first command that uses one, so refuse it here instead.
+GH_MIN_MAJOR=2
+GH_MIN_MINOR=94
+if command -v gh >/dev/null 2>&1; then
+  gh_version=$(gh --version 2>/dev/null | sed -n 's/^gh version \([0-9][0-9]*\.[0-9][0-9]*\)\..*/\1/p' | head -n 1)
+  gh_major=${gh_version%%.*}
+  gh_minor=${gh_version#*.}
+  if [ -z "$gh_version" ] || [ "$gh_major" -lt "$GH_MIN_MAJOR" ] || \
+     { [ "$gh_major" -eq "$GH_MIN_MAJOR" ] && [ "$gh_minor" -lt "$GH_MIN_MINOR" ]; }; then
+    echo "gh ${gh_version:-of unknown version} is too old. deskwork needs gh $GH_MIN_MAJOR.$GH_MIN_MINOR or later."
+    echo "Upgrade gh (https://github.com/cli/cli#installation), then re-run. Nothing was installed."
+    exit 1
+  fi
+fi
+
 if ! command -v python3 >/dev/null 2>&1; then
   MISSING="$MISSING python3"
 elif ! python3 -c 'import tomllib' >/dev/null 2>&1; then

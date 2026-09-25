@@ -142,4 +142,6 @@ The project is recorded by node ID, not by title. Projects v2 titles need not be
 
 ## Requirements
 
-`git`, `gh` (authenticated, with the `project` scope for board work), and Python 3.11 or later for `tomllib`. No packages, no venv.
+`git`, `gh` 2.94 or later (authenticated, with the `project` scope for board work), and Python 3.11 or later for `tomllib`. No packages, no venv. deskwork refuses to run on an older `gh`.
+
+`--repo` takes any path inside the repository: the root, a subdirectory or a worktree all find the same config. Issues are filed in the repository the `origin` remote points at, whatever other remotes the clone has.

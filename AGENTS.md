@@ -33,7 +33,11 @@ Everything else here is a preference. These are not.
 no bulk transition. Issues still get closed: `capture` may add `Closes #N` to a
 pull request body, and GitHub closes the issue on merge, after a human has
 reviewed the work. The skill needs no close verb at all, which is what makes the
-constraint hold itself rather than depend on restraint.
+constraint hold itself rather than depend on restraint. `gh.py` also refuses,
+before `gh` starts, any call that would close, delete or transfer an issue:
+`gh issue close|delete|transfer`, a `closeIssue`, `deleteIssue`,
+`transferIssue` or `updateIssue` mutation, a write to an issue carrying
+`state`, and any `DELETE` except removing a dependency edge.
 
 **2. Agents write only to Triage.** Never assigned, never prioritised, never
 `Next` or `In Progress`, and never into the roadmap. Nothing filed unreviewed
@@ -65,7 +69,7 @@ infer.
 `~/.dbhq/deskwork/`, nothing to leak, and nothing to migrate. Session state is
 reconstructed from git and GitHub rather than cached.
 
-**8. Standard library only.** Python standard library plus `gh`. No PyPI
+**8. Standard library only.** Python standard library plus `gh` 2.94 or later. No PyPI
 packages, no venv. This is why the config is TOML - `tomllib` is in the
 stdlib and no YAML parser is. Same line `buildwork` holds.
 
@@ -109,6 +113,10 @@ Anybody changing code that touches GitHub edges needs this on the page before th
 
 The split is deliberate and worth preserving:
 
+- **Every `gh` call goes through `gh.py`, and every `git` call through
+  `git.py`.** Nothing else imports `subprocess`. `repo.py` finds the root with
+  `git rev-parse --show-toplevel` and the name from the `origin` remote,
+  confirmed by `gh repo view`, so worktrees, subdirectories and forks work.
 - **Python does the deterministic half** - config, issue creation, duplicate
   search, graph construction, cycle detection, bottleneck finding, roadmap
   rendering. All of it is tested without a network, a token or an agent.
