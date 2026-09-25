@@ -1,0 +1,26 @@
+# deskwork does nothing in this repository until enabled is true.
+enabled = false
+
+# Where roadmap.md is written, relative to the repository root.
+roadmap = "roadmap.md"
+
+# Where designs live. An issue links to a file here rather than carrying the design.
+designs = "docs/designs/"
+
+# Issue types capture may set. Leave the list empty in a personal repository,
+# which has no issue types.
+issue_types = ["Bug", "Feature", "Task"]
+
+# The label on every issue deskwork files. It means "not yet reviewed". A
+# human removes it once the issue has been read and accepted.
+triage_label = "triage"
+
+[labels]
+# capture --area infra applies the label area:infra. init creates them.
+area = ["infra", "docs"]
+
+# Optional. A Projects v2 board, by node id, never by title. With one set,
+# capture also puts each new issue on the board with Status set to
+# triage_status. Find the id with: gh project list --owner OWNER --format json
+# project = "PVT_kwDOABCD1234"
+# triage_status = "Triage"

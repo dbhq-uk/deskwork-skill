@@ -55,8 +55,14 @@ def fake_gh(tmp_path, monkeypatch):
 SCRIPT = HERE.parent / "scripts" / "deskwork.py"
 CONFIG = (
     'enabled = true\nproject = "PVT_kwDOABCD1234"\ndesigns = "docs/designs/"\n'
-    'roadmap = "roadmap.md"\n'
+    'roadmap = "roadmap.md"\nissue_types = ["Bug", "Feature", "Task"]\n'
+    '[labels]\narea = ["infra", "docs"]\n'
 )
+OPTIONS = [
+    {"id": "opt_todo", "name": "Todo", "color": "GRAY", "description": ""},
+    {"id": "opt_triage", "name": "Triage", "color": "YELLOW", "description": "Not yet reviewed"},
+    {"id": "opt_done", "name": "Done", "color": "GREEN", "description": ""},
+]
 
 
 class FakeGitHub:
@@ -67,6 +73,11 @@ class FakeGitHub:
         self.state = {
             "repo": "owner/repo", "issues": {}, "project": "PVT_kwDOABCD1234",
             "faults": {}, "calls": [],
+            "labels": ["triage", "area:infra", "area:docs"],
+            "issue_types": ["Bug", "Feature", "Task"],
+            "board": {"id": "PVT_kwDOABCD1234", "title": "Board",
+                      "options": [dict(o) for o in OPTIONS]},
+            "search_hits": [],
         }
         bindir = tmp_path / "github-bin"
         bindir.mkdir()
@@ -82,13 +93,20 @@ class FakeGitHub:
         return ref if isinstance(ref, str) else f"{repo}#{ref}"
 
     def issue(self, number, title="", *, repo="owner/repo", state="OPEN", labels=(),
-              blocked_by=(), type="Task", comments=(), board_status=None, parent=None):
+              blocked_by=(), type="Task", comments=(), board_status=None, parent=None,
+              on_board=None, closed_at=None):
         self.state["issues"][self.key(number, repo)] = {
             "title": title or f"Issue {number}", "state": state, "type": type,
             "labels": list(labels), "blockedBy": [self.key(b) for b in blocked_by],
             "comments": [dict(c) for c in comments], "board_status": board_status,
+            "on_board": board_status is not None if on_board is None else on_board,
             "parent": self.key(parent) if parent is not None else None, "body": "",
+            "closed_at": closed_at,
         }
+        self.save()
+
+    def set(self, **values):
+        self.state.update(values)
         self.save()
 
     def fault(self, **faults):

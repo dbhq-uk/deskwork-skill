@@ -1,6 +1,10 @@
-# Projects v2
+# Boards (Projects v2)
 
-Projects v2 is GraphQL only - there is no REST equivalent. All interactions flow through four entry points: `board.fields()`, `board.items()`, `board.add_item()` and `board.set_field()`. Each wraps a GraphQL call and translates authentication errors into `MissingScope`.
+A board is optional. Without one, deskwork works from labels alone: every
+issue it files carries the Triage label, and that label is what keeps it out
+of the roadmap until a human has reviewed it. With `project` set in the
+config, `capture` also adds each new issue to the board and sets Status to
+Triage, and `roadmap` treats Status Triage the same as the label.
 
 ## Identifiers
 
@@ -10,71 +14,39 @@ One GitHub issue carries several identifiers and none of them is interchangeable
 |---|---|---|
 | Issue number | `144` | humans, URLs, `gh issue` commands |
 | Database id | `3527190001` | the REST dependencies API, which deskwork does not use |
-| GraphQL node id | `"I_kwDOAbc123"` | every Projects v2 mutation |
+| GraphQL node id | `I_kwDOAbc123` | adding the issue to a board |
+| Project item id | `PVTI_lADOABCD1234` | setting a field on the issue's place on one board |
 
-Dependency edges go through `gh issue edit --add-blocked-by` and `--remove-blocked-by`, which take the issue number and resolve it inside gh. The REST dependencies API takes a database id, links a different issue when handed a number, and still returns 201, so deskwork never calls it. Projects v2 mutations take the node id, which deskwork reads from `gh issue view --json id` and checks against the number it asked for.
+Dependency edges go through `gh issue edit --add-blocked-by` and `--remove-blocked-by`, which take the issue number and resolve it inside gh. The REST dependencies API takes a database id, links a different issue when handed a number, and still returns 201, so deskwork never calls it.
 
-## Projects must be addressed by node id
+Setting Status wants the project item id that adding the issue returned, not the issue's node id. Sending the node id fails after the issue already exists, which is how a retry used to file the same issue twice. deskwork keeps the item id, and checks the Status it set by reading it back.
 
-A project is always addressed by node id, never by title. Titles are not unique - a project need not even be linked to the repository. If you address a project by title, `--add-project` silently adds to one of two same-named boards. The project's own node id - returned by `projects list` or a Projects v2 query - is the only unambiguous address.
+## A board is addressed by node id
 
-## Authentication: the project scope
+Always by node id, never by title. Titles are not unique, and a project need
+not be linked to the repository, so `--add-project` by title can silently add
+to the wrong one of two same-named boards. Find the id with:
 
-Projects v2 mutations require the `project` scope. This is separate from the `repo` scope and must be granted explicitly:
+```bash
+gh project list --owner OWNER --format json
+```
+
+## What init changes on a board
+
+One thing: it adds the Triage option to the built-in Status field if it is
+missing. GitHub replaces the whole option list on that update, so init sends
+every existing option back with its id, colour and description, read
+immediately before, and afterwards checks that every one of them is still
+there. No item loses its status. deskwork creates no other fields; Effort and
+Risk are GitHub issue fields now, set on the issue rather than on a board.
+
+## The project scope
+
+Board work needs the `project` scope, separate from `repo`:
 
 ```bash
 gh auth refresh -s project
 ```
 
-Check the current token's scopes with `gh auth status`.
-
-If a mutation fails because the scope is missing, `board` raises `MissingScope` with the command to fix it. The error message names the fix (`gh auth refresh -s project`) rather than leaking the GraphQL error.
-
-## Mutations
-
-### add_item
-
-Add an issue to a project:
-
-```python
-import ids
-import board
-
-ref = ids.Ref("owner", "repo", ids.IssueNumber(144))
-node = ids.node_id(ref)
-item_id = board.add_item("PVT_kwDOABCD1234", node)
-```
-
-The issue must be passed as a GraphQL node id. The project must be passed as a GraphQL node id. Returns the item id.
-
-### set_field
-
-Set a single-select field on a project item:
-
-```python
-board.set_field("PVT_kwDOABCD1234", item_id, field_id, option_id)
-```
-
-Takes four node/field ids returned by `fields()` and `items()`. Returns nothing.
-
-## Queries
-
-### fields
-
-List the fields (columns) in a project:
-
-```python
-field_dict = board.fields("PVT_kwDOABCD1234")
-```
-
-Returns a dict keyed by field name, with each entry holding the field's id, name, and options (for single-select fields). The key is the field's display name; the id is a GraphQL node id for use in `set_field()`.
-
-### items
-
-List the issues in a project:
-
-```python
-item_list = board.items("PVT_kwDOABCD1234")
-```
-
-Returns a list of items, each holding the item's id, the issue's number/repository/state, and the field values on that item. Filtered to exclude draft items (which have no `content`).
+Without it, every mode that touches the board says so and names that command,
+and `doctor` exits 1.

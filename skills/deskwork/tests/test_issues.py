@@ -1,200 +1,107 @@
-import pathlib
-import sys
+import datetime
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
+import pytest
 
-import ids  # noqa: E402
-import issues  # noqa: E402
+import ids
+import issues
 
-TYPES_QUERY = "api graphql --input -"
-
-
-def test_org_issue_types_lists_enabled_names_only(fake_gh):
-    fake_gh({TYPES_QUERY: {"stdout": (
-        '{"data":{"organization":{"issueTypes":{"nodes":['
-        '{"name":"Task","isEnabled":true},'
-        '{"name":"Epic","isEnabled":false}]}}}}'
-    )}})
-    assert issues.org_issue_types("owner") == ["Task"]
+NOW = datetime.datetime(2026, 9, 25, 12, 0, tzinfo=datetime.timezone.utc)
 
 
-def test_search_similar_returns_candidates(fake_gh):
-    fake_gh({
-        'api search/issues?q=repo:owner/repo+is:issue+is:open+retry+logic':
-            {"stdout": '{"items":[{"number":12,"title":"retry logic drops attempts"}]}'},
-    })
-    found = issues.search_similar("owner", "repo", "retry logic")
-    assert found[0]["number"] == 12
+@pytest.mark.parametrize("kind, headings", [
+    ("Bug", ["Context", "Expected", "Actual", "Acceptance"]),
+    ("Feature", ["Context", "Proposal", "Acceptance", "Out of scope"]),
+    ("Task", ["Context", "Acceptance"]),
+])
+def test_each_type_has_its_own_sections(kind, headings):
+    body = issues.body_for(kind)
+    assert [line[2:-2] for line in body.splitlines() if line.startswith("**")] == headings
 
 
-def test_search_similar_percent_encodes_punctuation_in_terms(fake_gh):
-    # "&", "#" and "+" all mean something in a URL - unescaped, "&" starts a
-    # new query parameter, "#" truncates the rest as a fragment, and "+"
-    # reads as an extra encoded space. A title carrying any of them must not
-    # corrupt the search terms either side of it.
-    fake_gh({
-        "api search/issues?q=repo:owner/repo+is:issue+is:open+"
-        "fix+c%2B%2B+crash+%26+save+%23123":
-            {"stdout": '{"items":[]}'},
-    })
-    found = issues.search_similar("owner", "repo", "Fix C++ crash & save #123")
-    assert found == []
+def test_an_unknown_type_gets_task_sections():
+    assert "**Expected**" not in issues.body_for("Chore")
 
 
-def test_search_similar_keeps_short_distinctive_words_and_drops_stop_words(fake_gh):
-    # "CSP" is three characters and the whole reason the title is worth
-    # finding; "is", "on" and "the" carry no search signal at any length.
-    # A length cutoff keeps this backwards - it would drop "csp" and keep
-    # "wrong". Stop-word filtering keeps "csp" and drops the filler.
-    fake_gh({
-        "api search/issues?q=repo:owner/repo+is:issue+is:open+csp+wrong+apex":
-            {"stdout": '{"items":[{"number":7,"title":"CSP is wrong on the apex"}]}'},
-    })
-    found = issues.search_similar("owner", "repo", "CSP is wrong on the apex")
-    assert found[0]["number"] == 7
+def test_a_filled_body_passes():
+    body = issues.body_for("Bug", context="c", expected="e", actual="a", acceptance="x")
+    assert issues.body_problems("Bug", body) == []
 
 
-def test_search_similar_falls_back_to_every_word_when_all_are_stop_words(fake_gh):
-    # A title built entirely from stop words must still produce a usable
-    # search rather than an empty query string. If the fallback did not
-    # fire, the built path would not match this canned response and fake_gh
-    # would exit non-zero, failing the test loudly.
-    fake_gh({
-        "api search/issues?q=repo:owner/repo+is:issue+is:open+is+it+to+be":
-            {"stdout": '{"items":[]}'},
-    })
-    found = issues.search_similar("owner", "repo", "Is it to be")
-    assert found == []
+def test_a_body_still_saying_not_stated_is_refused():
+    problems = issues.body_problems("Task", issues.body_for("Task", context="Only context."))
+    assert any("_not stated_" in p for p in problems)
 
 
-def test_create_uses_the_rest_endpoint_because_gh_issue_create_has_no_type(fake_gh):
-    fake_gh({
-        "api repos/owner/repo/issues -X POST --input -":
-            {"stdout": '{"number": 145, "id": 999}'},
-    })
-    ref = issues.create("owner", "repo", "Title", "Body", "Bug", ["area:infra"])
-    assert ref == ids.Ref("owner", "repo", ids.IssueNumber(145))
+def test_a_bug_without_expected_and_actual_is_refused():
+    problems = issues.body_problems("Bug", "**Context**\n\nc\n\n**Acceptance**\n\nx")
+    assert len(problems) == 2 and "Expected" in problems[0] and "Actual" in problems[1]
 
 
-def test_create_without_issue_type_omits_type_from_the_payload(monkeypatch):
-    captured = {}
-
-    def fake_api(path, method="GET", body=None):
-        captured["path"] = path
-        captured["method"] = method
-        captured["body"] = body
-        return {"number": 7}
-
-    monkeypatch.setattr(issues.gh, "api", fake_api)
-    ref = issues.create("owner", "repo", "Title", "Body", None, [])
-    assert "type" not in captured["body"]
-    assert ref == ids.Ref("owner", "repo", ids.IssueNumber(7))
+def test_markdown_headings_count_as_sections():
+    assert issues.body_problems("Task", "## Context\nc\n### Acceptance\nx") == []
 
 
-def test_create_coerces_labels_to_a_list(monkeypatch):
-    captured = {}
-
-    def fake_api(path, method="GET", body=None):
-        captured["body"] = body
-        return {"number": 9}
-
-    monkeypatch.setattr(issues.gh, "api", fake_api)
-    issues.create("owner", "repo", "Title", "Body", "Task", ("area:infra", "area:web"))
-    assert captured["body"]["labels"] == ["area:infra", "area:web"]
+def test_similarity_ignores_word_order_filler_and_tense():
+    assert issues.similarity("Retry logic drops the last attempt",
+                             "Last attempt dropped by retry logic") == 1.0
 
 
-def test_body_for_a_bug_carries_the_required_sections():
-    body = issues.body_for(
-        "Bug",
-        context="Seen while changing the upload path.",
-        expected="The last attempt is retried.",
-        actual="The last attempt is dropped.",
-        acceptance="A test covers the final attempt.",
-    )
-    for heading in ("Context", "Expected", "Actual", "Acceptance"):
-        assert f"**{heading}**" in body
+def test_short_distinctive_words_are_kept():
+    assert "csp" in issues.tokens("CSP is wrong on the apex")
+    assert "is" not in issues.tokens("CSP is wrong on the apex")
 
 
-def test_body_for_a_feature_carries_the_required_sections():
-    body = issues.body_for(
-        "Feature",
-        context="No way to export a report today.",
-        proposal="Add a CSV export button.",
-        acceptance="Exporting produces a valid CSV with a header row.",
-        out_of_scope="Scheduled/automatic export.",
-    )
-    for heading in ("Context", "Proposal", "Acceptance", "Out of scope"):
-        assert f"**{heading}**" in body
+def _candidates(github, title):
+    return issues.duplicate_candidates("owner", "repo", title, now=NOW)
 
 
-def test_body_for_defaults_to_task_sections_for_an_unknown_kind():
-    body = issues.body_for("Chore", context="Tidying.", acceptance="Done.")
-    assert "**Context**" in body
-    assert "**Acceptance**" in body
-    assert "**Expected**" not in body
+def test_a_reworded_open_duplicate_is_found_by_title_overlap(github):
+    github.issue(12, "Retry logic drops the last attempt")
+    github.issue(13, "Unrelated work on exports")
+    found, warning = _candidates(github, "Last attempt is dropped by the retry logic")
+    assert [c["ref"] for c in found] == ["#12"] and warning is None
+    assert found[0]["found_by"] == "title overlap"
 
 
-def test_body_for_marks_a_missing_section_as_not_stated():
-    body = issues.body_for("Task", context="Only context given.")
-    assert "_not stated_" in body
+def test_a_duplicate_closed_in_the_last_thirty_days_is_found_by_search(github):
+    github.issue(20, "Uploads time out on slow links", state="CLOSED", closed_at="2026-09-15T10:00:00Z")
+    github.issue(21, "Old timeout problem", state="CLOSED", closed_at="2026-08-01T10:00:00Z")
+    github.set(search_hits=["owner/repo#20", "owner/repo#21"])
+    found, _ = _candidates(github, "Large files fail over a poor connection")
+    assert [(c["ref"], c["state"]) for c in found] == [("#20", "CLOSED")]
 
 
-def test_list_open_filters_out_pull_requests(fake_gh):
-    fake_gh({
-        "api repos/owner/repo/issues --paginate --slurp":
-            {"stdout": '[[{"number":1,"title":"Issue 1","state":"open",'
-             '"labels":[],"node_id":"I_1"},'
-             '{"number":2,"title":"PR 2","state":"open","pull_request":{},'
-             '"labels":[],"node_id":"I_2"},'
-             '{"number":3,"title":"Issue 3","state":"open",'
-             '"labels":[],"node_id":"I_3"}]]'},
-    })
-    found = issues.list_open("owner", "repo")
-    assert len(found) == 2
-    assert found[0]["number"] == 1
-    assert found[1]["number"] == 3
-    assert all("pull_request" not in issue for issue in found)
+def test_search_asks_for_hybrid_results(github):
+    _candidates(github, "Anything")
+    (search,) = [c["argv"] for c in github.calls if c["argv"][:2] == ["api", "search/issues"]]
+    assert "search_type=hybrid" in search and "-X" in search and "GET" in search
 
 
-def test_list_open_handles_pagination(fake_gh):
-    # Pagination returns multiple pages as separate arrays within the outer array
-    fake_gh({
-        "api repos/owner/repo/issues --paginate --slurp":
-            {"stdout": '[[{"number":1,"title":"Issue 1","state":"open",'
-             '"labels":[],"node_id":"I_1"}],'
-             '[{"number":2,"title":"Issue 2","state":"open",'
-             '"labels":[],"node_id":"I_2"}]]'},
-    })
-    found = issues.list_open("owner", "repo")
-    assert len(found) == 2
-    assert found[0]["number"] == 1
-    assert found[1]["number"] == 2
+def test_a_search_failure_is_a_warning_and_title_overlap_still_runs(github):
+    github.issue(12, "Retry logic drops the last attempt")
+    github.fault(search_down=True)
+    found, warning = _candidates(github, "Retry logic drops the last attempt")
+    assert [c["ref"] for c in found] == ["#12"]
+    assert "hybrid search failed" in warning
 
 
-def test_list_open_returns_empty_list_when_no_issues(fake_gh):
-    fake_gh({
-        "api repos/owner/repo/issues --paginate --slurp":
-            {"stdout": '[]'},
-    })
-    found = issues.list_open("owner", "repo")
-    assert found == []
+def test_nothing_similar_means_no_candidates(github):
+    github.issue(12, "Retry logic drops the last attempt")
+    assert _candidates(github, "Add a dark theme to the settings page") == ([], None)
 
 
-def test_ensure_label_creates_label_if_not_present(fake_gh):
-    fake_gh({
-        "api repos/owner/repo/labels/area%3Ainfra":
-            {"exit": 1, "stdout": ""},  # Label does not exist
-        "api repos/owner/repo/labels -X POST --input -":
-            {"stdout": '{"name":"area:infra"}'},
-    })
-    created = issues.ensure_label("owner", "repo", "area:infra", "FF0000", "Infrastructure")
-    assert created is True
-
-
-def test_ensure_label_does_not_update_existing_label(fake_gh):
-    fake_gh({
-        "api repos/owner/repo/labels/area%3Ainfra":
-            {"stdout": '{"name":"area:infra","color":"FF0000"}'},
-    })
-    created = issues.ensure_label("owner", "repo", "area:infra", "00FF00", "Infrastructure")
-    assert created is False
+def test_create_goes_through_gh_issue_create_with_every_flag(github):
+    github.issue(5)
+    github.issue(9, repo="other/lib")
+    parent = ids.Ref("owner", "repo", ids.IssueNumber(5))
+    blocker = ids.Ref("other", "lib", ids.IssueNumber(9))
+    ref = issues.create("owner", "repo", "Title", "**Context**\n\nc", "Bug", ["triage", "area:infra"],
+                        parent=parent, blocked_by=[blocker])
+    assert ref == ids.Ref("owner", "repo", ids.IssueNumber(6))
+    (argv,) = [c["argv"] for c in github.calls if c["argv"][:2] == ["issue", "create"]]
+    assert argv == ["issue", "create", "-R", "owner/repo", "--title", "Title", "--body-file", "-",
+                    "--label", "triage", "--label", "area:infra", "--type", "Bug",
+                    "--parent", "5", "--blocked-by", "https://github.com/other/lib/issues/9"]
+    node, problems = issues.check_filed(ref, "Title", "**Context**\n\nc", "Bug",
+                                        ["triage", "area:infra"], parent, [blocker])
+    assert problems == [] and node.startswith("I_")

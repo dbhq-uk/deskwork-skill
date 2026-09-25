@@ -2,12 +2,16 @@
 
 No file, or enabled missing or false, means deskwork writes nothing. Not a
 warning, not a prompt. A repository that has not asked for this cannot be
-written to by an accident in somebody's session.
+written to by an accident in somebody's session. The one exception is init
+in a repository with no file at all: it writes the starter, with enabled =
+false, and stops.
 """
+import pathlib
 import tomllib
 from dataclasses import dataclass, field
 
 CONFIG_PATH = ".github/deskwork.toml"
+STARTER = pathlib.Path(__file__).resolve().parent.parent / "deskwork.toml.example"
 
 
 class ConfigError(Exception):
@@ -16,15 +20,46 @@ class ConfigError(Exception):
 
 @dataclass
 class Config:
-    project: str
     designs: str
     roadmap: str
-    issue_types: list
-    area_labels: list
-    triage_status: str
+    issue_types: list = field(default_factory=list)
+    area_labels: list = field(default_factory=list)
     triage_label: str = "triage"
-    effort: list = field(default_factory=list)
-    risk: list = field(default_factory=list)
+    project: str = None  # a Projects v2 node id, or None for no board
+    triage_status: str = "Triage"
+
+    def area_label(self, area):
+        """The label capture applies and init creates for an area."""
+        return f"area:{area}"
+
+    @property
+    def labels(self):
+        """Every label deskwork applies, in the order init creates them."""
+        return [self.triage_label] + [self.area_label(a) for a in self.area_labels]
+
+
+def exists(repo_root):
+    return (repo_root / CONFIG_PATH).exists()
+
+
+def write_starter(repo_root):
+    """Write the starter config, disabled. Never overwrites an existing file."""
+    path = repo_root / CONFIG_PATH
+    if path.exists():
+        raise ConfigError(f"{CONFIG_PATH} already exists")
+    text = STARTER.read_text()
+    if "\nenabled = false\n" not in f"\n{text}":
+        raise ConfigError("the starter config must ship with enabled = false")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+
+
+def _strings(data, key, where=CONFIG_PATH):
+    value = data.get(key, [])
+    if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value):
+        raise ConfigError(f"{where}: {key} must be a list of names")
+    return value
 
 
 def load(repo_root):
@@ -46,28 +81,41 @@ def load(repo_root):
     if data.get("enabled") is not True:
         return None
 
-    project = data.get("project", "")
-    if not project.startswith("PVT_"):
+    if "fields" in data:
+        raise ConfigError(
+            f"{CONFIG_PATH}: [fields] is no longer read. Effort and Risk are GitHub "
+            "issue fields now, not board fields deskwork creates. The board's Triage "
+            'option is triage_status = "Triage", next to project.'
+        )
+
+    project = data.get("project")
+    if project is not None and not (isinstance(project, str) and project.startswith("PVT_")):
         raise ConfigError(
             f"{CONFIG_PATH}: project must be a Projects v2 node id starting PVT_, "
             f"not a title. Got {project!r}. Projects v2 titles are not unique and "
             "--add-project silently picks the wrong board. Find the id with: "
-            "gh project list --owner OWNER --format json"
+            "gh project list --owner OWNER --format json. Or leave project out "
+            "to work from labels alone."
         )
 
     for key in ("designs", "roadmap"):
         if not data.get(key):
             raise ConfigError(f"{CONFIG_PATH}: {key} is required")
 
-    fields = data.get("fields", {})
+    triage_label = data.get("triage_label", "triage")
+    if not isinstance(triage_label, str) or not triage_label.strip():
+        raise ConfigError(f"{CONFIG_PATH}: triage_label must be a label name")
+
+    labels = data.get("labels", {})
+    if not isinstance(labels, dict):
+        raise ConfigError(f"{CONFIG_PATH}: [labels] must be a table")
+
     return Config(
-        project=project,
         designs=data["designs"],
         roadmap=data["roadmap"],
-        issue_types=data.get("issue_types", []),
-        area_labels=data.get("labels", {}).get("area", []),
-        triage_status=fields.get("Status", "Triage"),
-        triage_label=data.get("triage_label", "triage"),
-        effort=fields.get("Effort", []),
-        risk=fields.get("Risk", []),
+        issue_types=_strings(data, "issue_types"),
+        area_labels=_strings(labels, "area", f"{CONFIG_PATH} [labels]"),
+        triage_label=triage_label,
+        project=project,
+        triage_status=data.get("triage_status", "Triage"),
     )

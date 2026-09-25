@@ -1,7 +1,8 @@
 """The identifiers one issue carries, kept apart.
 
-An issue has a number (#144), which people and gh use, and a GraphQL node id
-("I_kwDOAbc123"), which Projects v2 mutations want. The REST dependencies API
+An issue has a number (#144), which people and gh use, a GraphQL node id
+("I_kwDOAbc123"), which adding it to a board wants, and on each board an item
+id ("PVTI_..."), which setting a board field wants. The REST dependencies API
 also takes a database id, and will link a different issue in a different
 repository if it is given a number instead, returning 201 as it does. deskwork
 no longer uses that API: edges are written with gh issue edit, which takes the
@@ -19,10 +20,21 @@ class IssueNumber(int):
 
 
 class NodeId(str):
-    """The GraphQL node id. What every Projects v2 mutation wants.
+    """The GraphQL node id of an issue. What addProjectV2ItemById wants.
 
     Never construct this by wrapping a bare string read from a variable. The
-    only sanctioned source is node_id(), which checks what GitHub returned.
+    sanctioned sources are node_id(), which checks the number GitHub returned,
+    and an id GitHub returned in the same object as the issue's number.
+    """
+
+
+class ItemId(str):
+    """A Projects v2 item id ("PVTI_..."): the issue's place on one board.
+
+    A fourth identifier, and the one updateProjectV2ItemFieldValue wants.
+    Passing the issue's node id there instead fails after the issue already
+    exists, which is how a retry files the same issue twice. The only
+    sanctioned source is what addProjectV2ItemById or a board read returns.
     """
 
 
@@ -91,6 +103,16 @@ def require_node_id(value):
         raise TypeError(
             f"expected a NodeId (the GraphQL node id), got {type(value).__name__} "
             f"{value}. Fetch it with ids.node_id() first."
+        )
+    return str(value)
+
+
+def require_item_id(value):
+    """Guard for every function that sets a field on a board item."""
+    if not isinstance(value, ItemId) or not str(value).startswith("PVTI_"):
+        raise TypeError(
+            f"expected an ItemId (a project item id, PVTI_...), got "
+            f"{type(value).__name__} {value}. Use the id board.add_item() returned."
         )
     return str(value)
 

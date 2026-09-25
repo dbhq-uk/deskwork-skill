@@ -71,13 +71,13 @@ and every mode refuse an older `gh`.
 
 ## Opt in, per repository
 
-deskwork does nothing at all until a repository has a `.github/deskwork.toml` saying `enabled = true`. Write a starter:
+deskwork does nothing at all until a repository has a `.github/deskwork.toml` saying `enabled = true`. Write a starter, which ships switched off:
 
 ```bash
 python3 ~/.claude/skills/deskwork/scripts/deskwork.py init
 ```
 
-Full field reference: [`skills/deskwork/references/projects-v2.md`](skills/deskwork/references/projects-v2.md).
+Edit it, set `enabled = true`, commit it, and run `init` again to create the labels. The starter is [`skills/deskwork/deskwork.toml.example`](skills/deskwork/deskwork.toml.example).
 
 ## The modes
 
@@ -86,13 +86,16 @@ All require the working directory to be inside a git repository with `deskwork.t
 ### capture - file a new issue
 
 ```bash
+python3 ~/.claude/skills/deskwork/scripts/deskwork.py capture --template --type Bug > body.md
+# fill in every section, then:
 python3 ~/.claude/skills/deskwork/scripts/deskwork.py capture \
   --title "Retry logic drops the last attempt" \
   --type Bug \
-  --area infra
+  --area infra \
+  --body-file body.md
 ```
 
-Searches for similar issues and shows them to you, creates the issue if you proceed, adds it to the board, and sets its status to Triage. The issue type and area are optional.
+Refuses a body that leaves out a section its type needs or still says `_not stated_`. Before filing, it compares the title with every open issue and asks GitHub's hybrid search, which also sees issues closed in the last 30 days. If anything looks like the same issue, it files nothing and prints the candidates (exit 10); `--file` files anyway. Otherwise it files with `gh issue create`, applies the Triage label and the area label, reads the issue back, and with a board configured puts it on the board with Status set to Triage.
 
 ### review - reconcile the dependency graph
 
@@ -119,29 +122,29 @@ python3 ~/.claude/skills/deskwork/scripts/deskwork.py roadmap --order order.json
 
 Takes the order an agent reasoned, as a list of `{"ref": "#7", "reason": "..."}`, and checks it against the live graph. An entry that is closed, still in Triage or blocked is refused by name, and nothing is written. Otherwise it writes `roadmap.md` with the reason under each item under `## Next`, lists what is blocked, ready but not ordered, and still in Triage, and commits the file alone.
 
-### init - set up the board
+### init - opt in and set up
 
 ```bash
 python3 ~/.claude/skills/deskwork/scripts/deskwork.py init
 ```
 
-Creates the declared labels, fields and statuses. Idempotent - safe to re-run after a config change. This is how a new repository is onboarded in one command.
+With no config, writes the starter switched off. With one, creates the labels `capture` applies and, with a board, adds the Triage option to Status while keeping every existing option. Reports only what it created.
 
-### intake - add existing issues to the board
+### intake - put existing issues on the board
 
 ```bash
 python3 ~/.claude/skills/deskwork/scripts/deskwork.py intake
 ```
 
-Bulk-adds existing issues that are not on the board. Needed once per repository if it has prior issue history.
+Adds every open issue that is not on the board, for a repository with a board and issues from before deskwork.
 
-### doctor - report board drift
+### doctor - report drift
 
 ```bash
 python3 ~/.claude/skills/deskwork/scripts/deskwork.py doctor
 ```
 
-Reports any drift between the board and the repository - issues missing a required field, issues absent from the board, labels present but unconfigured, and the reverse.
+Reports labels in the config and not the repository, `area:` labels in the repository and not the config, issue types not enabled, and with a board, a missing Triage option and open issues not on it. Exits 1 on any drift.
 
 ## The config file
 
@@ -149,27 +152,26 @@ Reports any drift between the board and the repository - issues missing a requir
 
 ```toml
 enabled = true
-project = "PVT_kwDOABCD1234"
-designs = "docs/superpowers/specs/"
 roadmap = "roadmap.md"
+designs = "docs/designs/"
 issue_types = ["Bug", "Feature", "Task"]
+triage_label = "triage"
 
 [labels]
-area = ["website", "brand", "infra", "docs", "client"]
+area = ["infra", "docs"]
 
-[fields]
-Status = "Triage"
-Effort = ["S", "M", "L", "XL"]
-Risk = ["low", "medium", "high"]
+# Optional
+# project = "PVT_kwDOABCD1234"
+# triage_status = "Triage"
 ```
 
-The project is stored by node ID, not title. Titles are not unique; an unlinked project can conflict with a linked one. The ID is unambiguous.
+The board is optional. Without it, the Triage label alone marks what is unreviewed. With it, the project is stored by node ID, not title: titles are not unique, and an unlinked project can conflict with a linked one.
 
 `enabled = true` is required. File presence alone does not arm the skill.
 
 ## Testing
 
-The config parser, graph construction, cycle detection, bottleneck finding and roadmap rendering are tested without touching GitHub. `review`, `roadmap`, `link`, `unlink`, `reject` and `keep` also run end to end against a fake `gh` that keeps a small GitHub in a file and changes it on every write, so a test can check the write, the read-back and the comment.
+The config parser, graph construction, cycle detection, bottleneck finding and roadmap rendering are tested without touching GitHub. Every mode also runs end to end against a fake `gh` that keeps a small GitHub in a file and changes it on every write, so a test can check the write, the read-back and what GitHub would hold afterwards.
 
 ```bash
 python3 -m pytest skills/deskwork/tests -q
