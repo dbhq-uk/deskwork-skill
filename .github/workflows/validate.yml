@@ -17,6 +17,84 @@ jobs:
         with:
           python-version: "3.11"
       - run: python3 -m pip install --quiet pytest
+      # Claude Code reads the frontmatter as YAML, and a SKILL.md it cannot
+      # parse is not loaded at all. So parse it the same way, strictly: an
+      # unquoted ": " in the description, a duplicate key, or a name that is not
+      # the directory's name fails here rather than in somebody's session. A
+      # " #" in a plain description starts a comment and cuts it short with no
+      # error, so that fails too. PyYAML is for this check only; the skill
+      # itself stays standard library.
+      - name: SKILL.md frontmatter is strict YAML, and name matches the directory
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 - <<'PY'
+          import pathlib, re, sys
+          import yaml
+
+          class Strict(yaml.SafeLoader):
+              pass
+
+          def mapping(loader, node, deep=False):
+              seen = set()
+              for key_node, _ in node.value:
+                  key = loader.construct_object(key_node, deep=deep)
+                  if key in seen:
+                      raise yaml.constructor.ConstructorError(
+                          None, None, f"duplicate key {key!r}", key_node.start_mark)
+                  seen.add(key)
+              return loader.construct_mapping(node, deep)
+
+          Strict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, mapping)
+
+          def written(front):
+              # The description as written, when it is a plain scalar: the
+              # first line and any indented lines that continue it.
+              lines = front.splitlines()
+              for i, line in enumerate(lines):
+                  if line.startswith("description:"):
+                      first = line[len("description:"):].strip()
+                      if not first or first[0] in "'\"|>":
+                          return None
+                      rest = []
+                      for more in lines[i + 1:]:
+                          if not more[:1].isspace():
+                              break
+                          rest.append(more)
+                      return " ".join(" ".join([first, *rest]).split())
+              return None
+
+          skills = sorted(pathlib.Path("skills").glob("*/SKILL.md"))
+          if not skills:
+              sys.exit("no skills/*/SKILL.md found")
+          ok = True
+          for skill in skills:
+              def fail(why):
+                  global ok
+                  print(f"{skill}: {why}")
+                  ok = False
+              match = re.match(r"---\n(.*?\n)---\n", skill.read_text(encoding="utf-8"), re.S)
+              if not match:
+                  fail("no frontmatter between --- lines at the top")
+                  continue
+              try:
+                  meta = yaml.load(match.group(1), Loader=Strict)
+              except yaml.YAMLError as error:
+                  fail(f"frontmatter is not valid YAML: {error}")
+                  continue
+              if not isinstance(meta, dict):
+                  fail("frontmatter is not a mapping")
+                  continue
+              for key in ("name", "description"):
+                  if not isinstance(meta.get(key), str) or not meta[key].strip():
+                      fail(f"{key} is missing or empty")
+              if meta.get("name") != skill.parent.name:
+                  fail(f"name is {meta.get('name')!r} but the directory is {skill.parent.name!r}")
+              as_written = written(match.group(1))
+              parsed = " ".join(str(meta.get("description", "")).split())
+              if as_written is not None and as_written != parsed:
+                  fail(f"the description parses as {parsed!r}; a ' #' in it starts a comment")
+          sys.exit(0 if ok else 1)
+          PY
       - run: python3 -m pytest skills/deskwork/tests -q
       - name: no em dashes
         run: |

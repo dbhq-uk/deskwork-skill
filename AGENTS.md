@@ -171,7 +171,9 @@ grep -rn '/home/\|~/.claude/skills' skills/deskwork/SKILL.md && echo "FAIL: hard
 
 All must pass. CI runs the tests, the dash and brace checks, the ticket-id
 grep, a check that `plugin.json` carries no `version`, `shellcheck -S warning`
-and `ruff --select E9,F`.
+and `ruff --select E9,F`. It also parses the `SKILL.md` frontmatter as strict
+YAML: no duplicate key, a `name` that matches the skill's directory, and a
+`description` that a ` #` has not cut short.
 
 The tests are worth more than they look. A graph bug does not crash - it returns
 a confident wrong order. So the fixtures deliberately include cases that would
