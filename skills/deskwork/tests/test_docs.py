@@ -148,6 +148,13 @@ def test_no_trigger_phrase_overlaps_one_another_skill_answers_to():
                 assert a not in b and b not in a, f'"{trigger}" overlaps "{phrase}" ({owner})'
 
 
+def test_the_frontmatter_name_is_the_skill_directory():
+    # CI parses the frontmatter strictly too. This is the part that needs no
+    # YAML parser, so it runs locally with the standard library alone.
+    match = re.search(r"^name: (.*)$", SKILL, re.MULTILINE)
+    assert match and match.group(1).strip() == SKILL_DIR.name
+
+
 def test_the_description_is_a_plain_yaml_scalar_that_survives_parsing():
     # Unquoted, ": " makes the frontmatter invalid YAML and " #" starts a
     # comment, which silently cuts the description short.
