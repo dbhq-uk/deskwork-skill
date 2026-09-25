@@ -10,17 +10,14 @@ import config  # noqa: E402
 GOOD = """
 enabled = true
 project = "PVT_kwDOABCD1234"
+triage_status = "Triage"
 designs = "docs/superpowers/specs/"
 roadmap = "roadmap.md"
 issue_types = ["Bug", "Feature", "Task"]
+triage_label = "triage"
 
 [labels]
 area = ["website", "infra"]
-
-[fields]
-Status = "Triage"
-Effort = ["S", "M", "L", "XL"]
-Risk = ["low", "medium", "high"]
 """
 
 
@@ -102,3 +99,46 @@ def test_symlink_outside_repo_root_means_no_config(tmp_path):
     link.symlink_to(other_repo / ".github" / "deskwork.toml")
 
     assert config.load(repo) is None
+
+
+def test_the_board_is_optional(tmp_path):
+    cfg = config.load(write(tmp_path, GOOD.replace('project = "PVT_kwDOABCD1234"\n', "")))
+    assert cfg.project is None
+    assert cfg.triage_label == "triage"
+
+
+def test_the_labels_capture_applies_are_the_labels_init_creates(tmp_path):
+    cfg = config.load(write(tmp_path, GOOD))
+    assert cfg.labels == ["triage", "area:website", "area:infra"]
+    assert cfg.area_label("infra") == "area:infra"
+
+
+def test_the_old_fields_table_is_refused_with_what_replaced_it(tmp_path):
+    root = write(tmp_path, GOOD + '\n[fields]\nStatus = "Triage"\nEffort = ["S"]\n')
+    with pytest.raises(config.ConfigError) as caught:
+        config.load(root)
+    assert "triage_status" in str(caught.value)
+
+
+@pytest.mark.parametrize("bad", ['issue_types = "Bug"', "issue_types = [1]", 'triage_label = ""'])
+def test_malformed_values_are_config_errors(tmp_path, bad):
+    key = bad.split(" = ")[0]
+    text = "\n".join(line for line in GOOD.splitlines() if not line.startswith(key + " ="))
+    with pytest.raises(config.ConfigError):
+        config.load(write(tmp_path, text.replace("[labels]", bad + "\n\n[labels]")))
+
+
+def test_the_starter_is_written_switched_off_and_parses(tmp_path):
+    path = config.write_starter(tmp_path)
+    assert path == tmp_path / ".github" / "deskwork.toml"
+    assert config.load(tmp_path) is None  # enabled = false
+    switched_on = path.read_text().replace("enabled = false", "enabled = true")
+    path.write_text(switched_on)
+    cfg = config.load(tmp_path)
+    assert cfg.project is None and cfg.roadmap == "roadmap.md"
+
+
+def test_the_starter_never_overwrites(tmp_path):
+    write(tmp_path, GOOD)
+    with pytest.raises(config.ConfigError):
+        config.write_starter(tmp_path)

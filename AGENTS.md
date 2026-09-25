@@ -18,9 +18,11 @@ runs the work; deskwork decides what the work is and what order it goes in.
 ```
 .claude-plugin/plugin.json          # plugin manifest
 skills/deskwork/SKILL.md            # the skill (agent-facing instructions)
+skills/deskwork/deskwork.toml.example  # the starter init writes, switched off
 skills/deskwork/references/         # issue shapes, Projects v2, config format
 skills/deskwork/scripts/            # Python, standard library only
-skills/deskwork/tests/              # pytest, no network, no token, no agent
+skills/deskwork/tests/              # pytest, no network, no token, no agent;
+                                    #   fake_github.py is the fake gh the modes run against
 install.sh / install-codex.sh       # local symlink installers
 docs/superpowers/specs/             # the dated design record
 ```
@@ -42,17 +44,24 @@ before `gh` starts, any call that would close, delete or transfer an issue:
 **2. Agents write only to Triage.** Never assigned, never prioritised, never
 `Next` or `In Progress`, and never into the roadmap. Nothing filed unreviewed
 may look like committed work. A human moves issues out of Triage after reasoning
-has been done.
+has been done. Triage is the `triage_label` on the issue, and Status Triage when
+a board is configured; `roadmap` refuses to order an issue in either.
 
 **3. Destructive Project operations are gated and the gate is re-verified.**
-Creating a board, a field or a view is unguarded. Deleting one, or removing an
-item, requires: show exactly what goes, re-read it immediately before acting,
-and print the IDs so a wrong call is recoverable. A board is worked by several
-sessions and moves underneath a listing.
+deskwork deletes nothing on a board and creates no fields. Its one board update
+that could lose data is adding the Triage option to Status, because GitHub
+replaces the whole option list: every existing option is re-read immediately
+before and sent back with its id, and afterwards every one must still be there.
+Anything that deletes a field, an option, a view or an item must show exactly
+what goes, re-read it immediately before acting, and print the IDs so a wrong
+call is recoverable. A board is worked by several sessions and moves underneath
+a listing.
 
 **4. No config file, or no `enabled = true`, means no writes.** Not a warning,
 not a prompt. The skill does nothing. `config.load()` returns `None` and the
-caller stops at once.
+caller stops at once. The one exception is `init` in a repository with no file
+at all: it writes the starter with `enabled = false` and stops, touching nothing
+on GitHub.
 
 **5. Designs live in git. The issue points at the file.** A design is never
 pasted into an issue body. It lives in a file under the `designs:` path from

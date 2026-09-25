@@ -28,76 +28,123 @@ MODES = (
 )
 
 
+def _refs(text, home):
+    """Refs from a comma-separated list: 5,6 or #5,owner/repo#9."""
+    return [ids.parse(part, home) for part in str(text).split(",") if part.strip()]
+
+
+def _capture_inputs(args, cfg):
+    """(issue type to send, labels, body, parent, blockers), or None after saying why."""
+    home = (args.owner, args.name)
+    kind = args.issue_type or "Task"
+    if cfg.issue_types and kind not in cfg.issue_types:
+        sys.stderr.write(
+            f"capture: --type {kind} is not one of this repository's configured types: "
+            f"{', '.join(cfg.issue_types)}\n"
+        )
+        return None
+    if args.area and args.area not in cfg.area_labels:
+        configured = ", ".join(cfg.area_labels) or "none configured"
+        sys.stderr.write(f"capture: --area {args.area} is not a configured area ({configured})\n")
+        return None
+    if not args.body_file:
+        sys.stderr.write(
+            "capture: --body-file is required (a path, or - for stdin). Start from "
+            f"capture --template --type {kind} and fill every section.\n"
+        )
+        return None
+    try:
+        body = sys.stdin.read() if args.body_file == "-" else pathlib.Path(args.body_file).read_text()
+    except OSError as error:
+        sys.stderr.write(f"capture: cannot read the body: {error}\n")
+        return None
+    problems = issues.body_problems(kind, body)
+    if problems:
+        sys.stderr.write("capture: the body was refused, and nothing was filed.\n")
+        for problem in problems:
+            sys.stderr.write(f"  {problem}\n")
+        return None
+    labels = [cfg.triage_label] + ([cfg.area_label(args.area)] if args.area else [])
+    try:
+        parent = ids.parse(args.parent, home) if args.parent else None
+        blockers = _refs(args.blocked_by, home) if args.blocked_by else []
+    except ValueError as error:
+        sys.stderr.write(f"capture: {error}\n")
+        return None
+    send_type = kind if cfg.issue_types else None
+    return send_type, labels, body, parent, blockers
+
+
 def mode_capture(args, cfg):
-    """File a new issue: duplicate search, create, add to board, set to Triage."""
-    if not args.title:
+    """File a new issue in Triage, after checking for duplicates. Reads it back."""
+    if args.template:
+        sys.stdout.write(issues.body_for(args.issue_type or "Task") + "\n")
+        return 0
+    if not (args.title or "").strip():
         sys.stderr.write("capture: --title is required\n")
         return 1
+    inputs = _capture_inputs(args, cfg)
+    if inputs is None:
+        return 1
+    send_type, labels, body, parent, blockers = inputs
+    title = args.title.strip()
 
-    owner, repo = args.owner, args.name
+    if not args.file:
+        try:
+            candidates, warning = issues.duplicate_candidates(args.owner, args.name, title)
+        except gh.GhError as error:
+            sys.stderr.write(f"capture: cannot list open issues to check for duplicates: {error}\n")
+            return 1
+        if warning:
+            sys.stderr.write(f"capture: {warning}\n")
+        if candidates:
+            sys.stdout.write(json.dumps({
+                "filed": False,
+                "candidates": candidates,
+                "next": "Read each candidate. If one is this issue, comment on it instead. "
+                        "If none is, run the same command again with --file.",
+            }, indent=2) + "\n")
+            return 10
 
-    # Search for similar issues first (read only, always safe)
-    sys.stdout.write("Searching for similar issues...\n")
-    similar = issues.search_similar(owner, repo, args.title)
-    if similar:
-        sys.stdout.write(f"Found {len(similar)} similar open issues:\n")
-        for issue in similar[:5]:
-            sys.stdout.write(f"  #{issue['number']}: {issue.get('title', '')}\n")
-        sys.stdout.write("\n")
-
-    # Prepare the issue body
-    body = issues.body_for("Task")
-    labels = []
-    if args.area:
-        labels.append(f"area:{args.area}")
-
-    # Check dry-run before any write
     if args.dry_run:
-        sys.stdout.write("Would create issue:\n")
-        sys.stdout.write(f"  Title: {args.title}\n")
-        if args.issue_type:
-            sys.stdout.write(f"  Type: {args.issue_type}\n")
-        if labels:
-            sys.stdout.write(f"  Labels: {', '.join(labels)}\n")
-        sys.stdout.write("  Body:\n")
-        for line in body.split("\n"):
-            sys.stdout.write(f"    {line}\n")
-        sys.stdout.write(f"  Project: {cfg.project}\n")
-        sys.stdout.write(f"  Status: {cfg.triage_status}\n")
+        sys.stdout.write(json.dumps({
+            "filed": False, "dry_run": True, "title": title, "type": send_type,
+            "labels": labels, "parent": str(parent) if parent else None,
+            "blocked_by": [str(b) for b in blockers],
+            "board": cfg.project, "status": cfg.triage_status if cfg.project else None,
+            "body": body,
+        }, indent=2) + "\n")
         return 0
 
-    # Perform the actual writes
-    # Create the issue
-    ref = issues.create(owner, repo, args.title, body, args.issue_type, labels)
-
-    # Get the NodeId for adding to the board
     try:
-        node_id = ids.node_id(ref)
-    except ids.MismatchedIssue as e:
-        sys.stderr.write(f"capture: {e}\n")
+        ref = issues.create(args.owner, args.name, title, body, send_type, labels, parent, blockers)
+    except (gh.GhError, ValueError) as error:
+        sys.stderr.write(f"capture: gh did not file the issue: {error}\n")
         return 1
-
-    # Add to board
+    home = (args.owner, args.name)
+    filed = f"capture: filed {ref.short(home)} https://github.com/{ref.owner}/{ref.repo}/issues/{int(ref.number)}"
+    sys.stdout.write(filed + "\n")
+    retry = f"{ref.short(home)} exists now. Do not file it again; fix what is wrong on it by hand."
     try:
-        board.add_item(cfg.project, node_id)
-    except board.MissingScope:
-        sys.stderr.write(
-            "Projects v2 needs the project scope, which this token does not have.\n"
-            "Run: gh auth refresh -s project\n"
-        )
-        return 1
+        node, problems = issues.check_filed(ref, title, body, send_type, labels, parent, blockers)
+    except (gh.GhError, ids.MismatchedIssue) as error:
+        sys.stderr.write(f"capture: could not read {ref.short(home)} back: {error}. {retry}\n")
+        return 4
+    if problems:
+        sys.stderr.write(f"capture: {ref.short(home)} is not as asked: {'; '.join(problems)}. {retry}\n")
+        return 4
 
-    # Set status to triage
-    fields_dict = board.fields(cfg.project)
-    if "Status" in fields_dict:
-        status_field = fields_dict["Status"]
-        # Find the triage option
-        for option in status_field.get("options", []):
-            if option["name"] == cfg.triage_status:
-                board.set_field(cfg.project, node_id, status_field["id"], option["id"])
-                break
-
-    sys.stdout.write(f"Created {ref}\n")
+    if cfg.project:
+        try:
+            item = board.add_item(cfg.project, node)
+            board.set_status(cfg.project, item, cfg.triage_status)
+        except board.MissingScope as error:
+            sys.stderr.write(f"capture: {error}. {retry}\n")
+            return 4
+        except (board.NotConfirmed, gh.GhError) as error:
+            sys.stderr.write(f"capture: the board step failed: {error}. {retry}\n")
+            return 4
+        sys.stdout.write(f"capture: on the board with Status {cfg.triage_status}, read back\n")
     return 0
 
 
@@ -386,175 +433,164 @@ def mode_roadmap(args, cfg):
 
 
 def mode_init(args, cfg):
-    """Create the declared labels, fields and statuses. Idempotent."""
-    owner, repo = args.owner, args.name
+    """Create the labels capture applies, and the Triage option on the board.
 
-    # Check dry-run before any writes
+    Idempotent. Reports only what it created, and reads each write back.
+    """
+    wanted = {cfg.triage_label: (issues.TRIAGE_COLOUR, "Filed by an agent and not yet reviewed")}
+    for area in cfg.area_labels:
+        wanted[cfg.area_label(area)] = (issues.AREA_COLOUR, f"Area: {area}")
+    try:
+        have = issues.repo_labels(args.owner, args.name)
+    except gh.GhError as error:
+        sys.stderr.write(f"init: cannot list labels: {error}\n")
+        return 1
+    missing = [label for label in wanted if label not in have]
+
+    add_option = False
+    if cfg.project:
+        try:
+            status = board.fields(cfg.project).get("Status") or {}
+        except board.MissingScope as error:
+            sys.stderr.write(f"init: {error}\n")
+            return 1
+        except gh.GhError as error:
+            sys.stderr.write(f"init: cannot read the board: {error}\n")
+            return 1
+        add_option = not any(o["name"] == cfg.triage_status for o in status.get("options", []))
+
     if args.dry_run:
-        sys.stdout.write("Would create:\n")
-        for label_name in cfg.area_labels:
-            sys.stdout.write(f"  label: {label_name}\n")
-        for field_name, field_options in [
-            ("Status", [cfg.triage_status] if cfg.triage_status else []),
-            ("Effort", cfg.effort),
-            ("Risk", cfg.risk),
-        ]:
-            if field_options:
-                sys.stdout.write(f"  field: {field_name} with options {field_options}\n")
-        sys.stdout.write("(dry run - nothing written)\n")
+        for label in missing:
+            sys.stdout.write(f"init: would create label {label}\n")
+        if add_option:
+            sys.stdout.write(f"init: would add the {cfg.triage_status} option to Status on {cfg.project}\n")
+        if not missing and not add_option:
+            sys.stdout.write("init: nothing to create\n")
         return 0
 
-    created_count = 0
-
-    # Create area labels
-    for label_name in cfg.area_labels:
+    created = []
+    for label in missing:
+        colour, description = wanted[label]
         try:
-            if issues.ensure_label(owner, repo, label_name, "000000", ""):
-                created_count += 1
-                sys.stdout.write(f"created label: {label_name}\n")
-        except gh.GhError as e:
-            sys.stderr.write(f"init: failed to create label {label_name}: {e}\n")
+            issues.create_label(args.owner, args.name, label, colour, description)
+        except gh.GhError as error:
+            sys.stderr.write(f"init: could not create label {label}: {error}\n")
             return 1
+        created.append(f"label {label}")
+    if missing:
+        still = [label for label in missing if label not in issues.repo_labels(args.owner, args.name)]
+        if still:
+            sys.stderr.write(f"init: labels not there after creating them: {', '.join(still)}\n")
+            return 4
+    if add_option:
+        try:
+            if board.ensure_status_option(cfg.project, cfg.triage_status):
+                created.append(f"the {cfg.triage_status} option on Status")
+        except (board.MissingScope, board.NotConfirmed, gh.GhError) as error:
+            sys.stderr.write(f"init: {error}\n")
+            return 4
 
-    # Create Projects v2 fields
-    try:
-        for field_name, field_options in [
-            ("Status", [cfg.triage_status] if cfg.triage_status else []),
-            ("Effort", cfg.effort),
-            ("Risk", cfg.risk),
-        ]:
-            if field_options:
-                try:
-                    board.ensure_field(cfg.project, field_name, field_options)
-                    created_count += 1
-                    sys.stdout.write(f"created field: {field_name}\n")
-                except board.MissingScope:
-                    sys.stdout.write(
-                        "Projects v2 needs the project scope, which this token does not have.\n"
-                        "Run: gh auth refresh -s project\n"
-                    )
-                    return 1
-                except gh.GhError as e:
-                    sys.stderr.write(f"init: failed to create field {field_name}: {e}\n")
-                    return 1
-    except board.MissingScope:
-        sys.stdout.write(
-            "Projects v2 needs the project scope, which this token does not have.\n"
-            "Run: gh auth refresh -s project\n"
-        )
-        return 1
-
-    if created_count > 0:
-        sys.stdout.write(f"init: created {created_count} items\n")
+    if created:
+        for item in created:
+            sys.stdout.write(f"init: created {item}\n")
     else:
-        sys.stdout.write("init: everything already configured\n")
-
+        sys.stdout.write("init: nothing to create, everything is in place\n")
     return 0
 
 
 def mode_intake(args, cfg):
-    """Add existing issues that are not on the board."""
-    owner, repo = args.owner, args.name
-
-    # Get all open issues
-    try:
-        all_issues = issues.list_open(owner, repo)
-    except gh.GhError as e:
-        sys.stderr.write(f"intake: failed to list issues: {e}\n")
-        return 1
-
-    # Get issues already on the board
-    try:
-        board_items = board.items(cfg.project)
-    except board.MissingScope:
-        sys.stdout.write(
-            "Projects v2 needs the project scope, which this token does not have.\n"
-            "Run: gh auth refresh -s project\n"
-        )
-        return 1
-
-    on_board = set()
-    for item in board_items:
-        if item.get("content"):
-            content = item["content"]
-            if content["repository"]["owner"]["login"] == owner and content["repository"]["name"] == repo:
-                on_board.add(ids.IssueNumber(content["number"]))
-
-    # Find issues not on the board
-    to_add = []
-    for issue_ref in all_issues:
-        if ids.IssueNumber(issue_ref["number"]) not in on_board:
-            to_add.append(issue_ref)
-
-    # Check dry-run before any writes
-    if args.dry_run:
-        sys.stdout.write(f"Would add {len(to_add)} issues to board:\n")
-        for issue_ref in to_add:
-            ref = ids.Ref(owner, repo, ids.IssueNumber(issue_ref["number"]))
-            sys.stdout.write(f"  {ref}\n")
+    """Put open issues that are not on the board onto it. Needs a board."""
+    if not cfg.project:
+        sys.stdout.write("intake: no board configured (project is not set), so nothing to do\n")
         return 0
-
-    # Add them to the board
-    added_count = 0
-    for issue_ref in to_add:
-        ref = ids.Ref(owner, repo, ids.IssueNumber(issue_ref["number"]))
+    try:
+        open_now = issues.open_issues(args.owner, args.name)
+        on_board = {ref for ref, _, _ in board.items(cfg.project)}
+    except board.MissingScope as error:
+        sys.stderr.write(f"intake: {error}\n")
+        return 1
+    except gh.GhError as error:
+        sys.stderr.write(f"intake: {error}\n")
+        return 1
+    to_add = [(ref, node) for ref, node in open_now if ref not in on_board]
+    home = (args.owner, args.name)
+    if args.dry_run or not to_add:
+        for ref, _ in to_add:
+            sys.stdout.write(f"intake: would add {ref.short(home)}\n")
+        if not to_add:
+            sys.stdout.write("intake: every open issue is already on the board\n")
+        return 0
+    for ref, node in to_add:
         try:
-            node_id = ids.node_id(ref)
-            board.add_item(cfg.project, node_id)
-            added_count += 1
-            sys.stdout.write(f"added {ref}\n")
-        except (ids.MismatchedIssue, gh.GhError) as e:
-            sys.stderr.write(f"intake: failed to add {ref}: {e}\n")
+            board.add_item(cfg.project, node)
+        except (board.MissingScope, gh.GhError) as error:
+            sys.stderr.write(f"intake: could not add {ref.short(home)}: {error}\n")
             return 1
-
-    if added_count > 0:
-        sys.stdout.write(f"intake: added {added_count} issues\n")
-    else:
-        sys.stdout.write("intake: all issues already on board\n")
-
+    now_on = {ref for ref, _, _ in board.items(cfg.project)}
+    absent = [ref.short(home) for ref, _ in to_add if ref not in now_on]
+    if absent:
+        sys.stderr.write(f"intake: not on the board after adding: {', '.join(absent)}\n")
+        return 4
+    sys.stdout.write(f"intake: added {len(to_add)} issues, read back from the board\n")
     return 0
 
 
 def mode_doctor(args, cfg):
-    """Report drift in configuration and board state."""
-    owner, repo = args.owner, args.name
+    """Report drift between the config, the labels, the types and the board.
 
-    # Get all open issues and board items
+    Exits 1 on any drift. The gh version was checked before this ran.
+    """
+    home = (args.owner, args.name)
+    problems, notes = [], [f"gh {'.'.join(map(str, gh.version()))}, repository {args.owner}/{args.name}"]
     try:
-        all_issues = issues.list_open(owner, repo)
-        board_items = board.items(cfg.project)
-        board_fields = board.fields(cfg.project)
-    except board.MissingScope:
-        sys.stdout.write(
-            "Projects v2 needs the project scope, which this token does not have.\n"
-            "Run: gh auth refresh -s project\n"
-        )
-        return 0
-    except gh.GhError as e:
-        sys.stderr.write(f"doctor: failed to check board: {e}\n")
+        have = issues.repo_labels(args.owner, args.name)
+    except gh.GhError as error:
+        problems.append(f"cannot list labels: {error}")
+        have = None
+    if have is not None:
+        for label in cfg.labels:
+            if label not in have:
+                problems.append(f"label {label} is in the config and not in the repository. Run init.")
+        for label in sorted(have):
+            if label.startswith("area:") and label[5:] not in cfg.area_labels:
+                problems.append(f"label {label} is in the repository and not in the config's areas.")
+    if cfg.issue_types:
+        try:
+            enabled = issues.repo_issue_types(args.owner, args.name)
+        except gh.GhError as error:
+            problems.append(f"cannot read the issue types: {error}")
+            enabled = None
+        if enabled is not None and not enabled:
+            problems.append("this repository has no issue types. Set issue_types = [] in the config.")
+        elif enabled is not None:
+            for kind in cfg.issue_types:
+                if kind not in enabled:
+                    problems.append(f"issue type {kind} is in the config and not enabled for this repository.")
+    if cfg.project:
+        try:
+            status = board.fields(cfg.project).get("Status")
+            on_board = {ref for ref, _, _ in board.items(cfg.project)}
+            open_now = issues.open_issues(args.owner, args.name)
+        except board.MissingScope as error:
+            problems.append(str(error))
+        except gh.GhError as error:
+            problems.append(f"cannot read the board: {error}")
+        else:
+            if not status or not any(o["name"] == cfg.triage_status for o in status.get("options", [])):
+                problems.append(f"the board's Status field has no {cfg.triage_status} option. Run init.")
+            absent = [ref.short(home) for ref, _ in open_now if ref not in on_board]
+            if absent:
+                problems.append(f"{len(absent)} open issues are not on the board: {', '.join(absent)}. Run intake.")
+    else:
+        notes.append("no board configured, so Triage is the label alone")
+    for note in notes:
+        sys.stdout.write(f"doctor: {note}\n")
+    for problem in problems:
+        sys.stdout.write(f"doctor: DRIFT {problem}\n")
+    if problems:
+        sys.stdout.write(f"doctor: {len(problems)} problems\n")
         return 1
-
-    # Build set of issues on the board
-    on_board = set()
-    for item in board_items:
-        if item.get("content"):
-            content = item["content"]
-            if content["repository"]["owner"]["login"] == owner and content["repository"]["name"] == repo:
-                on_board.add(ids.IssueNumber(content["number"]))
-
-    # Report issues not on board
-    not_on_board = []
-    for issue in all_issues:
-        if ids.IssueNumber(issue["number"]) not in on_board:
-            not_on_board.append(issue["number"])
-
-    if not_on_board:
-        sys.stdout.write(f"doctor: {len(not_on_board)} issues not on board\n")
-
-    # Report field configuration
-    sys.stdout.write(f"doctor: board has {len(board_items)} items, {len(all_issues)} open issues in repo\n")
-    sys.stdout.write(f"doctor: configured fields: {', '.join(board_fields.keys())}\n")
-
+    sys.stdout.write("doctor: no drift\n")
     return 0
 
 
@@ -566,7 +602,12 @@ def main(argv=None):
     parser.add_argument("--title")
     parser.add_argument("--type", dest="issue_type")
     parser.add_argument("--area")
-    parser.add_argument("--blocked-by", help="the blocking issue: 12, #12, owner/repo#12 or a URL")
+    parser.add_argument("--blocked-by", help="the blocking issue: 12, #12, owner/repo#12 or a URL "
+                        "(capture takes a comma-separated list)")
+    parser.add_argument("--body-file", help="capture: the body, from a file or - for stdin")
+    parser.add_argument("--template", action="store_true", help="capture: print the body sections for --type")
+    parser.add_argument("--parent", help="capture: file the issue as a sub-issue of this one")
+    parser.add_argument("--file", action="store_true", help="capture: file even though duplicates were found")
     parser.add_argument("--reason", help="why, recorded on the issue")
     parser.add_argument("--order", help='roadmap: JSON file (or - for stdin) of {"ref", "reason"}')
     parser.add_argument("--json", action="store_true", help="review: print JSON")
@@ -578,6 +619,19 @@ def main(argv=None):
     except repo.NotARepo as error:
         sys.stderr.write(f"deskwork: {error}\n")
         return 1
+
+    if args.mode == "init" and not config.exists(args.root):
+        # The one write allowed before the gate: a starter that is off.
+        if args.dry_run:
+            sys.stdout.write(f"init: would write {config.CONFIG_PATH} with enabled = false\n")
+            return 0
+        path = config.write_starter(args.root)
+        sys.stdout.write(
+            f"init: wrote {path.relative_to(args.root).as_posix()} with enabled = false. "
+            "Edit it, set enabled = true, commit it, then run init again to create "
+            "the labels.\n"
+        )
+        return 0
 
     try:
         cfg = config.load(args.root)
@@ -591,7 +645,7 @@ def main(argv=None):
         sys.stderr.write(
             f"deskwork: {args.root}/{config.CONFIG_PATH} is missing, or does not "
             "carry enabled = true. deskwork does nothing in a repository that has "
-            "not opted in.\n"
+            "not opted in. init writes a starter file, switched off.\n"
         )
         return 2
 

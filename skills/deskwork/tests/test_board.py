@@ -1,162 +1,102 @@
-import pathlib
-import sys
+import json
 
 import pytest
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
+import board
+import gh
+import ids
 
-import board  # noqa: E402
-import gh  # noqa: E402
-import ids  # noqa: E402
+PROJECT = "PVT_kwDOABCD1234"
 
 
 def test_add_item_requires_a_node_id():
     with pytest.raises(TypeError):
-        board.add_item("PVT_x", ids.IssueNumber(144))
+        board.add_item(PROJECT, ids.IssueNumber(144))
 
 
 def test_add_item_refuses_a_bare_string():
     with pytest.raises(TypeError):
-        board.add_item("PVT_x", "I_kwDOAbc123")
+        board.add_item(PROJECT, "I_kwDOAbc123")
 
 
-def test_missing_project_scope_is_reported_plainly(fake_gh, monkeypatch):
+@pytest.mark.parametrize("item", [
+    ids.NodeId("I_kwDOAbc123"),    # the issue's own id: the old bug
+    "PVTI_lADOABCD1234",            # right shape, untyped
+    ids.ItemId("I_kwDOAbc123"),    # typed, wrong shape
+    ids.IssueNumber(144),
+])
+def test_set_field_takes_only_a_project_item_id(item):
+    with pytest.raises(TypeError):
+        board.set_field(PROJECT, item, "PVTSSF_status", "opt_triage")
+
+
+def test_missing_project_scope_is_reported_plainly(monkeypatch):
     def boom(*args, **kwargs):
         raise gh.GhError("your authentication token is missing required scopes [read:project]")
     monkeypatch.setattr(gh, "graphql", boom)
     with pytest.raises(board.MissingScope) as caught:
-        board.fields("PVT_x")
+        board.fields(PROJECT)
     assert "gh auth refresh -s project" in str(caught.value)
 
 
-def test_add_item_returns_the_item_id(monkeypatch):
-    def mock_graphql(query, **variables):
-        return {
-            "addProjectV2ItemById": {
-                "item": {
-                    "id": "PVTI_lADOABCD1234"
-                }
-            }
-        }
-    monkeypatch.setattr(gh, "graphql", mock_graphql)
-    item_id = board.add_item(
-        "PVT_kwDOABCD1234",
-        ids.NodeId("I_kwDOAbc123")
-    )
-    assert item_id == "PVTI_lADOABCD1234"
+def test_add_item_returns_the_item_id(github):
+    github.issue(144)
+    item = board.add_item(PROJECT, ids.node_id(ids.Ref("owner", "repo", ids.IssueNumber(144))))
+    assert isinstance(item, ids.ItemId) and item.startswith("PVTI_")
 
 
-def test_fields_returns_project_fields(monkeypatch):
-    def mock_graphql(query, **variables):
-        return {
-            "node": {
-                "fields": {
-                    "nodes": [
-                        {
-                            "id": "PVTF_x",
-                            "name": "Status",
-                            "options": [{"id": "opt1", "name": "Todo"}]
-                        }
-                    ]
-                }
-            }
-        }
-    monkeypatch.setattr(gh, "graphql", mock_graphql)
-    fields_result = board.fields("PVT_kwDOABCD1234")
-    assert "Status" in fields_result
-    assert fields_result["Status"]["id"] == "PVTF_x"
+def test_items_follows_every_page(github):
+    for n in range(1, 102):
+        github.issue(n, board_status="Todo")
+    github.state["board"]["drafts"] = 3
+    github.save()
+    found = board.items(PROJECT)
+    assert len(found) == 101  # drafts are skipped
+    assert {ref.number for ref, _, _ in found} == set(range(1, 102))
 
 
-def test_items_returns_project_items(monkeypatch):
-    def mock_graphql(query, **variables):
-        return {
-            "node": {
-                "items": {
-                    "nodes": [
-                        {
-                            "id": "PVTI_x",
-                            "content": {
-                                "number": 144,
-                                "repository": {"name": "test", "owner": {"login": "owner"}},
-                                "state": "OPEN"
-                            }
-                        }
-                    ]
-                }
-            }
-        }
-    monkeypatch.setattr(gh, "graphql", mock_graphql)
-    items_result = board.items("PVT_kwDOABCD1234")
-    assert len(items_result) == 1
-    assert items_result[0]["id"] == "PVTI_x"
+def test_set_status_uses_the_item_id_and_reads_back(github):
+    github.issue(144)
+    item = board.add_item(PROJECT, ids.node_id(ids.Ref("owner", "repo", ids.IssueNumber(144))))
+    board.set_status(PROJECT, item, "Triage")
+    assert github.load()["issues"]["owner/repo#144"]["board_status"] == "Triage"
 
 
-def test_missing_scope_message_includes_fix():
-    """Test that MissingScope messages are helpful."""
-    exc = board.MissingScope("Projects v2 needs the project scope, which this token does not have. Run: gh auth refresh -s project")
-    assert "gh auth refresh -s project" in str(exc)
+def test_set_status_names_the_board_when_the_option_is_missing(github):
+    github.state["board"]["options"] = [o for o in github.state["board"]["options"] if o["name"] != "Triage"]
+    github.save()
+    github.issue(144)
+    item = board.add_item(PROJECT, ids.node_id(ids.Ref("owner", "repo", ids.IssueNumber(144))))
+    with pytest.raises(board.NotConfirmed) as caught:
+        board.set_status(PROJECT, item, "Triage")
+    assert "Board" in str(caught.value) and PROJECT in str(caught.value) and "'Triage'" in str(caught.value)
 
 
-def test_ensure_field_returns_existing_field(monkeypatch):
-    """ensure_field is idempotent - returns existing field without creation."""
-    def mock_graphql(query, **variables):
-        # Only fields query, no mutation
-        if "createProjectV2Field" not in query:
-            return {
-                "node": {
-                    "fields": {
-                        "nodes": [
-                            {
-                                "id": "PVTF_existing",
-                                "name": "Status",
-                                "options": [
-                                    {"id": "opt1", "name": "Todo"},
-                                    {"id": "opt2", "name": "Done"}
-                                ]
-                            }
-                        ]
-                    }
-                }
-            }
-        raise AssertionError("ensure_field should not call create if field exists")
-    monkeypatch.setattr(gh, "graphql", mock_graphql)
-    result = board.ensure_field("PVT_x", "Status", ["Todo", "Done"])
-    assert result["name"] == "Status"
-    assert result["id"] == "PVTF_existing"
+def test_a_status_that_does_not_stick_is_not_confirmed(github):
+    github.issue(144)
+    github.fault(drop_status=True)
+    item = board.add_item(PROJECT, ids.node_id(ids.Ref("owner", "repo", ids.IssueNumber(144))))
+    with pytest.raises(board.NotConfirmed):
+        board.set_status(PROJECT, item, "Triage")
 
 
-def test_ensure_field_creates_field_if_missing(monkeypatch):
-    """ensure_field creates a field if it does not exist."""
-    call_count = [0]
+def test_adding_the_triage_option_sends_json_objects_and_keeps_every_existing_option(github):
+    github.state["board"]["options"] = [o for o in github.state["board"]["options"] if o["name"] != "Triage"]
+    github.save()
+    github.issue(1, board_status="Todo")
+    github.issue(2, board_status="Done")
+    assert board.ensure_status_option(PROJECT, "Triage") is True
 
-    def mock_graphql(query, **variables):
-        call_count[0] += 1
-        if "createProjectV2Field" in query:
-            # Mutation call
-            return {
-                "createProjectV2Field": {
-                    "field": {
-                        "id": "PVTF_new",
-                        "name": "Status",
-                        "__typename": "ProjectV2SingleSelectField",
-                        "options": [
-                            {"id": "opt1", "name": "Todo"},
-                            {"id": "opt2", "name": "Done"}
-                        ]
-                    }
-                }
-            }
-        else:
-            # Query call to check existing fields
-            return {
-                "node": {
-                    "fields": {
-                        "nodes": []  # No fields exist
-                    }
-                }
-            }
-    monkeypatch.setattr(gh, "graphql", mock_graphql)
-    result = board.ensure_field("PVT_x", "Status", ["Todo", "Done"])
-    assert result["name"] == "Status"
-    assert result["id"] == "PVTF_new"
-    assert call_count[0] == 2  # One query, one mutation
+    (call,) = [c for c in github.calls if "mutation DeskworkAddOption" in c["stdin"]]
+    sent = json.loads(call["stdin"])["variables"]["options"]
+    assert all(isinstance(o, dict) and {"name", "color", "description"} <= set(o) for o in sent)
+    assert [o.get("id") for o in sent] == ["opt_todo", "opt_done", None]
+    state = github.load()
+    assert [o["name"] for o in state["board"]["options"]] == ["Todo", "Done", "Triage"]
+    assert state["issues"]["owner/repo#1"]["board_status"] == "Todo"  # nobody lost a status
+    assert state["issues"]["owner/repo#2"]["board_status"] == "Done"
+
+
+def test_an_option_already_there_is_not_added_again(github):
+    assert board.ensure_status_option(PROJECT, "Triage") is False
+    assert github.writes() == []

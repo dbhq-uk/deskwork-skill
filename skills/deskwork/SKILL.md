@@ -13,33 +13,31 @@ Before anything:
 python3 "${CLAUDE_SKILL_DIR}/scripts/deskwork.py" doctor
 ```
 
-No `.github/deskwork.toml`, or no `enabled = true` in it, means this repository has not opted in. Say so and stop. Offer `init` if they want one.
+Exit 2 means this repository has not opted in: no `.github/deskwork.toml`, or no `enabled = true` in it. Say so and stop. Offer `init`, which writes a starter file switched off. Exit 1 from `doctor` means drift, which it names line by line; `init` or `intake` fixes most of it.
 
 ## Modes
 
 ### capture - file a new issue
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/deskwork.py" capture --repo . --title "Title goes here" --type Task --area infra
+python3 "${CLAUDE_SKILL_DIR}/scripts/deskwork.py" capture --template --type Bug > body.md
+python3 "${CLAUDE_SKILL_DIR}/scripts/deskwork.py" capture --title "Retry logic drops the last attempt" --type Bug --area infra --body-file body.md
 ```
 
-The issue type (`Bug`, `Feature`, `Task`) is optional; it defaults to `Task`. The area is one of your configured area labels; it is optional.
+The type is one of the configured `issue_types` and defaults to `Task`. The area is one of the configured areas and is optional. `--parent 3` files it as a sub-issue; `--blocked-by 5,owner/repo#9` declares blockers, but only when the body states the dependency as a fact. Anything that needs judgement goes through `review`.
 
 **Before writing the body:**
 
 1. Read the relevant files, tests and recent commits. An issue written from a hunch is one a later agent has to unpick.
-2. Search for duplicates - `capture` shows similar open issues and you decide whether to file or comment on an existing one. It never blocks.
-3. Cite what you found in the body - a file path, a test name, a commit.
+2. Cite what you found in the body: a file path, a test name, a commit.
 
-**The body structure:**
+**The body:** `--template` prints the sections for the type: Context and Acceptance for a Task, plus Expected and Actual for a Bug, plus Proposal and Out of scope for a Feature. Fill every one. A body that still says `_not stated_`, or lacks a section its type needs, is refused before anything is written. Acceptance criteria are checkable statements - true or false once the work is done, not directions to head in.
 
-`body_for` generates the sections (Context and Acceptance for a Task, additional sections for Bug and Feature). Fill them. The acceptance criteria are checkable statements - something true or false once the work is done, not directions to head in.
+**Designs go to a file, never into the body.** If the change needs a design - more than a paragraph, a sequence of steps, a diagram - write it to a file under `designs` in the config and link to it from Context.
 
-**Designs go to a file, never into the body:**
+**Duplicates are checked before filing.** `capture` compares the title with every open issue, and asks GitHub's hybrid search, which also sees issues closed in the last 30 days. If anything looks like the same issue, it files nothing, prints the candidates as JSON, and exits 10. Read them. If one is this issue, comment on it instead. If none is, run the same command again with `--file`.
 
-If the change needs a design - more than a paragraph, a sequence of steps, a diagram - write it to a file under `designs:` in your config and link to it from the issue's Context section. A file is versioned and diffable. An issue body is a summary with a pointer in it.
-
-The created issue lands on the board in Triage status. Never assigned. Never prioritised. Never `Next` or `In Progress`.
+**What it writes:** the issue, with the `triage` label and the area label, then reads it back and checks the title, body, type, labels, parent and blockers. With a board configured, it also adds the issue to the board and sets Status to Triage, and reads that back. Never assigned, never prioritised, never anything but Triage. If a check fails after the issue exists, `capture` exits 4 and names the issue: do not file it again.
 
 ### review - reconcile the dependency graph
 
@@ -92,54 +90,50 @@ The order is yours to reason, not the script's to compute. `order.json` is a lis
 
 The sections are `## Next` (your order, and only your order), `## Blocked`, `## Later` (ready but not ordered this time), `## Cycles`, `## Bottlenecks` and `## Triage`. buildwork runs what is under `## Next`, so nothing unreviewed or blocked is ever put there. A Triage issue appears only under `## Triage`, listed and never ordered, until a human moves it out.
 
-### init - set up labels, fields and board
+### init - opt in and set up
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/deskwork.py" init --repo .
+python3 "${CLAUDE_SKILL_DIR}/scripts/deskwork.py" init
 ```
 
-Creates the declared labels, fields and statuses on the board. Idempotent - safe to re-run after a config change. This is how a new repository is onboarded in one command.
+In a repository with no config, `init` writes `.github/deskwork.toml` with `enabled = false` and stops. A human edits it, sets `enabled = true` and commits it. Run `init` again and it creates the labels `capture` applies (the Triage label, and `area:NAME` for each area) and, with a board configured, adds the Triage option to the board's Status field, keeping every existing option. It reports only what it created, so a second run says nothing was created. `--dry-run` shows what it would create.
 
-### intake - add existing issues to the board
+### intake - put existing issues on the board
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/deskwork.py" intake --repo .
+python3 "${CLAUDE_SKILL_DIR}/scripts/deskwork.py" intake
 ```
 
-Bulk-adds existing issues that are not yet on the board. Needed once per repository for repositories with prior history.
+Adds every open issue that is not on the board, then reads the board back. Only for a repository with a board configured and issues from before deskwork. `--dry-run` lists them.
 
-### doctor - report board drift
+### doctor - report drift
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/deskwork.py" doctor --repo .
+python3 "${CLAUDE_SKILL_DIR}/scripts/deskwork.py" doctor
 ```
 
-Reports drift: issues missing a required field, issues absent from the board, labels present in the repo but not in the config, and the reverse. Board drift is invisible until somebody looks.
+Checks labels the config names and the repository lacks, `area:` labels the repository has and the config does not, issue types the config names and the repository has not enabled, and, with a board, the Triage option on Status and open issues missing from the board. Exits 1 on any drift or a missing `project` scope, and 0 when everything matches.
 
 ## The config file
 
-`.github/deskwork.toml`, committed to the repository it governs. TOML, not YAML - Python's standard library parses TOML and has never parsed YAML.
+`.github/deskwork.toml`, committed to the repository it governs. `init` writes a starter.
 
 ```toml
 enabled = true                      # required; file presence alone arms nothing
-project = "PVT_kwDOABCD1234"        # the Project NODE ID, never its title
-designs = "docs/superpowers/specs/"
 roadmap = "roadmap.md"
-issue_types = ["Bug", "Feature", "Task"]
+designs = "docs/designs/"
+issue_types = ["Bug", "Feature", "Task"]   # [] in a personal repository
 triage_label = "triage"             # an issue carrying it is unreviewed
 
 [labels]
-area = ["website", "brand", "infra", "docs", "client"]
+area = ["infra", "docs"]            # capture --area infra applies area:infra
 
-[fields]
-Status = "Triage"                   # where every agent-filed item lands
-Effort = ["S", "M", "L", "XL"]
-Risk = ["low", "medium", "high"]
+# Optional: a Projects v2 board, by node id, never by title.
+# project = "PVT_kwDOABCD1234"
+# triage_status = "Triage"
 ```
 
-The project is recorded by node ID, not by title. Projects v2 titles need not be unique and a project may not be linked to the repository at all. The ID is unambiguous.
-
-`enabled = true` is required. A half-written or copied-in file must not arm the skill.
+Without `project`, deskwork works from labels alone. An issue is in Triage while it carries the Triage label, or while its Status on the board is Triage. A human takes it out of Triage by removing the label and, with a board, moving its Status.
 
 ## Reference
 

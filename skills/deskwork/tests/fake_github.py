@@ -124,7 +124,73 @@ def cmd_issue(state, argv):
                     issue["blockedBy"].remove(target)
         print(url(key))
         return
+    if verb == "create":
+        return issue_create(state, argv, repo)
+    if verb == "list":
+        fields = flag(argv, "--json", "").split(",")
+        keys = sorted((k for k, v in state["issues"].items()
+                       if k.startswith(repo + "#") and v.get("state", "OPEN") == "OPEN"),
+                      key=lambda k: int(k.split("#")[1]))
+        limit = int(flag(argv, "--limit", "30"))
+        print(json.dumps([issue_json(state, k, fields) for k in keys[:limit]]))
+        return
     fail(f"unsupported: gh {' '.join(argv)}")
+
+
+def issue_create(state, argv, repo):
+    labels = [argv[i + 1] for i, a in enumerate(argv) if a == "--label"]
+    known = state.get("labels")
+    for label in labels:
+        if known is not None and label not in known:
+            fail(f"could not add label: '{label}' not found")
+    kind = flag(argv, "--type")
+    if kind and kind not in state.get("issue_types", []):
+        fail(f"issue type '{kind}' not found")
+    number = state.get("next_number") or 1 + max(
+        [int(k.split("#")[1]) for k in state["issues"] if k.startswith(repo + "#")] or [0])
+    state["next_number"] = number + 1
+    key = f"{repo}#{number}"
+    parent = flag(argv, "--parent")
+    blocked = flag(argv, "--blocked-by")
+    state["issues"][key] = {
+        "title": flag(argv, "--title"), "state": "OPEN", "type": kind, "labels": labels,
+        "blockedBy": [key_from(b, repo) for b in blocked.split(",")] if blocked else [],
+        "parent": key_from(parent, repo) if parent else None,
+        "body": sys.stdin_body, "comments": [],
+    }
+    if state.get("faults", {}).get("drop_labels_on_create"):
+        state["issues"][key]["labels"] = []
+    print(url(key))
+
+
+def cmd_label(state, argv):
+    repo = flag(argv, "-R", state["repo"])
+    labels = state.setdefault("labels", [])
+    if argv[1] == "list":
+        print(json.dumps([{"name": name} for name in labels]))
+        return
+    if argv[1] == "create":
+        name = argv[2]
+        if name in labels:
+            fail(f"label with name \"{name}\" already exists; use `--force` to update its color and description")
+        if not state.get("faults", {}).get("drop_label_creates"):
+            labels.append(name)
+        print(f"Label \"{name}\" created in {repo}")
+        return
+    fail(f"unsupported: gh {' '.join(argv)}")
+
+
+def item_id(key):
+    return "PVTI_" + key.replace("/", "_").replace("#", "_")
+
+
+def board_fields(state):
+    board = state["board"]
+    return [
+        {"id": "PVTF_title", "name": "Title"},
+        {"id": board.get("status_field", "PVTSSF_status"), "name": "Status",
+         "options": board["options"]},
+    ]
 
 
 def graph_page(state, variables, query):
@@ -173,6 +239,79 @@ def cmd_graphql(state, body):
                  "The 'project' field requires one of the following scopes: ['read:project']")
         print(json.dumps({"data": graph_page(state, variables, query)}))
         return
+    faults = state.get("faults", {})
+    board_ops = ("DeskworkBoardFields", "DeskworkBoardItems", "DeskworkAddItem",
+                 "DeskworkSetStatus", "DeskworkItemStatus", "DeskworkAddOption")
+    if any(op in query for op in board_ops) and faults.get("no_project_scope"):
+        fail("Your token has not been granted the required scopes to execute this query. "
+             "The 'fields' field requires one of the following scopes: ['read:project']")
+    board = state.get("board") or {}
+    if "query DeskworkBoardFields" in query:
+        nodes = board_fields(state) if board else []
+        print(json.dumps({"data": {"node": {"title": board.get("title", "Board"),
+                                            "fields": {"totalCount": len(nodes), "nodes": nodes}}}}))
+        return
+    if "query DeskworkBoardItems" in query:
+        items = [(k, v) for k, v in sorted(state["issues"].items()) if v.get("on_board")]
+        items = [{"id": item_id(k),
+                  "content": {"number": int(k.split("#")[1]), "repository": {"nameWithOwner": k.split("#")[0]}},
+                  "fieldValueByName": {"name": v["board_status"]} if v.get("board_status") else None}
+                 for k, v in items]
+        items += [{"id": f"PVTI_draft_{n}", "content": {}, "fieldValueByName": None}
+                  for n in range(board.get("drafts", 0))]
+        start = int(variables.get("after") or 0)
+        page = items[start:start + 100]
+        end = start + len(page)
+        print(json.dumps({"data": {"node": {"items": {
+            "pageInfo": {"hasNextPage": end < len(items), "endCursor": str(end)}, "nodes": page}}}}))
+        return
+    if "mutation DeskworkAddItem" in query:
+        content = variables["content"]
+        key = next((k for k in state["issues"] if issue_json(state, k, ["id"])["id"] == content), None)
+        if key is None:
+            fail(f"Could not resolve to a node with the global id of '{content}'")
+        state["issues"][key]["on_board"] = True
+        print(json.dumps({"data": {"addProjectV2ItemById": {"item": {"id": item_id(key)}}}}))
+        return
+    if "mutation DeskworkSetStatus" in query:
+        item = variables["item"]
+        if not item.startswith("PVTI_"):
+            fail(f"Could not resolve to a ProjectV2Item with the global id of '{item}'")
+        key = next((k for k in state["issues"] if item_id(k) == item), None)
+        option = next((o for o in board["options"] if o["id"] == variables["option"]), None)
+        if key is None or option is None:
+            fail("Could not resolve the item or the option")
+        if not faults.get("drop_status"):
+            state["issues"][key]["board_status"] = option["name"]
+        print(json.dumps({"data": {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": item}}}}))
+        return
+    if "query DeskworkItemStatus" in query:
+        key = next((k for k in state["issues"] if item_id(k) == variables["item"]), None)
+        status = state["issues"][key].get("board_status") if key else None
+        print(json.dumps({"data": {"node": {"fieldValueByName": {"name": status} if status else None}}}))
+        return
+    if "mutation DeskworkAddOption" in query:
+        options = variables["options"]
+        if not isinstance(options, list):
+            fail("Variable $options of type [ProjectV2SingleSelectFieldOptionInput!]! was provided invalid value")
+        new_options = []
+        for n, option in enumerate(options):
+            if not isinstance(option, dict) or not all(isinstance(option.get(k), str) for k in ("name", "color", "description")):
+                fail("Variable $options of type [ProjectV2SingleSelectFieldOptionInput!]! was provided invalid value")
+            new_options.append({"id": option.get("id") or f"opt_new_{n}", "name": option["name"],
+                                "color": option["color"], "description": option["description"]})
+        kept = {o["id"] for o in new_options}
+        lost = {o["name"] for o in board["options"] if o["id"] not in kept}
+        for issue in state["issues"].values():
+            if issue.get("board_status") in lost:
+                issue["board_status"] = None
+        board["options"] = new_options
+        print(json.dumps({"data": {"updateProjectV2Field": {"projectV2Field": {"id": "PVTSSF_status"}}}}))
+        return
+    if "query DeskworkIssueTypes" in query:
+        types = [{"name": t, "isEnabled": True} for t in state.get("issue_types", [])]
+        print(json.dumps({"data": {"repository": {"issueTypes": {"nodes": types}}}}))
+        return
     fail(f"unsupported GraphQL operation: {query.strip().splitlines()[0]}")
 
 
@@ -181,6 +320,17 @@ def cmd_api(state, argv, stdin):
     method = flag(argv, "-X", "GET")
     if path == "graphql":
         cmd_graphql(state, json.loads(stdin))
+        return
+    if path == "search/issues":
+        if state.get("faults", {}).get("search_down"):
+            fail("HTTP 403: API rate limit exceeded for search")
+        items = []
+        for key in state.get("search_hits", []):
+            issue = state["issues"][key]
+            items.append({"number": int(key.split("#")[1]), "title": issue["title"],
+                          "state": issue.get("state", "OPEN").lower(),
+                          "closed_at": issue.get("closed_at")})
+        print(json.dumps({"total_count": len(items), "items": items}))
         return
     match = re.match(r"^repos/([^/]+/[^/]+)/issues/(\d+)/comments$", path)
     if match:
@@ -225,7 +375,10 @@ def main():
         elif argv[:2] == ["repo", "view"]:
             print(json.dumps({"nameWithOwner": state["repo"]}))
         elif argv[:1] == ["issue"]:
+            sys.stdin_body = sys.stdin.read() if flag(argv, "--body-file") == "-" else ""
             cmd_issue(state, argv)
+        elif argv[:1] == ["label"]:
+            cmd_label(state, argv)
         elif argv[:1] == ["api"]:
             cmd_api(state, argv, stdin)
         else:

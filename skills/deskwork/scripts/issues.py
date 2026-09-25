@@ -1,10 +1,11 @@
-"""Creating and finding issues.
+"""Filing issues, finding duplicates, and reading the graph.
 
-gh issue create has no --type flag, so creation goes through the REST endpoint.
-Issue types are the canonical GitHub categorisation; labels are the fallback
-for an organisation that has not configured them.
+Filing goes through gh issue create, which since gh 2.94 sets the issue type,
+the parent and blocked-by edges itself, so nothing here builds a REST payload
+or resolves an id. Every issue filed is read back before it is reported.
 """
-import urllib.parse
+import datetime
+import re
 from dataclasses import dataclass, field
 
 import deps
@@ -12,140 +13,212 @@ import gh
 import ids
 import memory
 
-_SECTIONS = {
+SECTIONS = {
     "Bug": ["Context", "Expected", "Actual", "Acceptance"],
     "Feature": ["Context", "Proposal", "Acceptance", "Out of scope"],
     "Task": ["Context", "Acceptance"],
 }
+NOT_STATED = "_not stated_"
+TRIAGE_COLOUR = "FBCA04"
+AREA_COLOUR = "C5DEF5"
 
-_ALIASES = {
-    "expected": "Expected", "actual": "Actual", "context": "Context",
-    "proposal": "Proposal", "acceptance": "Acceptance",
-    "out_of_scope": "Out of scope",
-}
-
-# Words that carry no search signal, dropped regardless of length. A length
-# cutoff - drop anything three characters or fewer - is backwards: it throws
-# away exactly the words most likely to be distinctive (an acronym like CSP,
-# an error code, a short proper noun) while keeping long but generic ones
-# ("wrong", "about", "using"). This list drops only known filler, however
-# long, and keeps everything else, however short.
+# Words that carry no signal for spotting a duplicate, dropped regardless of
+# length. Dropping by length is backwards: it throws away an acronym like CSP
+# or an error code, the words a title is most likely to be distinctive by.
 _STOP_WORDS = frozenset({
     "a", "an", "the",
     "and", "or", "but", "nor", "so", "if", "than", "then",
     "is", "are", "was", "were", "be", "been", "being",
     "do", "does", "did",
     "has", "have", "had",
-    "in", "on", "at", "by", "to", "of", "for", "with", "from", "as",
+    "in", "on", "at", "by", "to", "of", "for", "with", "from", "as", "when", "after",
     "it", "its", "this", "that", "these", "those",
     "not", "no",
     "will", "can", "should", "would", "could",
 })
+DUPLICATE_SCORE = 0.5  # title overlap at or above this is a candidate
+RECENTLY_CLOSED_DAYS = 30
 
 
-def org_issue_types(org):
-    query = (
-        '{ organization(login:"%s"){ issueTypes(first:20)'
-        "{ nodes{ name isEnabled } } } }" % org
-    )
-    data = gh.graphql(query)
-    return [
-        node["name"]
-        for node in data["organization"]["issueTypes"]["nodes"]
-        if node["isEnabled"]
-    ]
+def sections_for(kind):
+    return SECTIONS.get(kind, SECTIONS["Task"])
 
 
-def _search_terms(title):
-    """Pick the words of a title worth searching on.
-
-    Drop stop words, not short words - dropping by length is backwards, since
-    it discards the acronyms and error codes a title is most likely to be
-    distinctive by. If every word in the title turns out to be a stop word,
-    fall back to the full word list rather than searching on nothing.
-    """
-    words = title.lower().split()
-    kept = [word for word in words if word not in _STOP_WORDS]
-    return kept or words
-
-
-def search_similar(owner, repo, title):
-    """Cheap lexical search. Shown to a human, never acted on automatically.
-
-    Each term is percent-encoded before it is joined into the query string.
-    A title is free text - an unescaped &, #, space or + in it would
-    otherwise be read as a query separator, a URL fragment marker, a literal
-    space, or an extra encoded space, corrupting the search rather than
-    merely narrowing it.
-    """
-    terms = "+".join(
-        urllib.parse.quote(word, safe="") for word in _search_terms(title)
-    )
-    path = f"search/issues?q=repo:{owner}/{repo}+is:issue+is:open+{terms}"
-    return (gh.api(path) or {}).get("items", [])
-
-
-def body_for(kind, **sections):
+def body_for(kind, **supplied):
+    """The body skeleton for an issue type, with any sections supplied filled in."""
+    aliases = {"out_of_scope": "Out of scope"}
+    given = {aliases.get(k, k.capitalize()): v for k, v in supplied.items()}
     lines = []
-    wanted = _SECTIONS.get(kind, _SECTIONS["Task"])
-    supplied = {_ALIASES.get(k, k): v for k, v in sections.items()}
-    for heading in wanted:
-        lines.append(f"**{heading}**")
-        lines.append("")
-        lines.append(supplied.get(heading, "_not stated_"))
-        lines.append("")
+    for heading in sections_for(kind):
+        lines += [f"**{heading}**", "", given.get(heading, NOT_STATED), ""]
     return "\n".join(lines).strip()
 
 
-def create(owner, repo, title, body, issue_type, labels):
-    payload = {"title": title, "body": body, "labels": list(labels)}
-    if issue_type:
-        payload["type"] = issue_type
-    created = gh.api(f"repos/{owner}/{repo}/issues", method="POST", body=payload)
-    return ids.Ref(owner, repo, ids.IssueNumber(created["number"]))
+def body_problems(kind, body):
+    """Why a body cannot be filed as this type, or [] if it can."""
+    problems = []
+    if not body.strip():
+        return ["the body is empty"]
+    if NOT_STATED in body:
+        problems.append(f"the body still says {NOT_STATED}. Fill every section or cut it.")
+    for heading in sections_for(kind):
+        pattern = rf"^\s*(?:\*\*{re.escape(heading)}\*\*|#{{2,3}}\s+{re.escape(heading)})\s*:?\s*$"
+        if not re.search(pattern, body, re.MULTILINE | re.IGNORECASE):
+            problems.append(f"a {kind} needs a {heading} section (a line reading **{heading}**)")
+    return problems
 
 
-def list_open(owner, repo):
-    """List all open issues in a repository, paginated and filtered.
+def _stem(word):
+    for suffix in ("ing", "ed", "es", "s"):
+        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+            word = word[: -len(suffix)]
+            if len(word) > 3 and word[-1] == word[-2] and word[-1] not in "aeiou":
+                word = word[:-1]  # dropped -> drop
+            return word
+    return word
 
-    Returns a list of dicts with at least number, title, state, labels and
-    node_id. Pull requests are filtered out (identified by the pull_request
-    key). Pagination is handled transparently.
+
+def tokens(title):
+    words = re.findall(r"[a-z0-9][a-z0-9+#.-]*", title.lower())
+    return {_stem(w) for w in words if w not in _STOP_WORDS}
+
+
+def similarity(a, b):
+    left, right = tokens(a), tokens(b)
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
+def duplicate_candidates(owner, name, title, now=None):
+    """Issues that might already be this one: (candidates, warning).
+
+    Two sources, because each misses what the other catches. Title overlap
+    against every open issue has no index lag, so it sees an issue a parallel
+    agent filed a moment ago. GitHub's hybrid search matches on meaning, so it
+    sees a reworded title, and it includes issues closed in the last 30 days.
+    A search failure is a warning, not a stop.
     """
-    path = f"repos/{owner}/{repo}/issues"
-    # Use --paginate --slurp to get all pages as a single array
-    data = gh.api(path, extra_args=["--paginate", "--slurp"])
-    if not data:
-        return []
-
-    # Flatten the pages array into a single list of issues
-    issues_list = []
-    for page in data:
-        if isinstance(page, list):
-            issues_list.extend(page)
-        else:
-            issues_list.append(page)
-
-    # Filter out pull requests - any entry with a pull_request key is a PR
-    return [issue for issue in issues_list if "pull_request" not in issue]
-
-
-def ensure_label(owner, repo, name, colour, description):
-    """Create a label if it does not exist. Idempotent.
-
-    If the label already exists, it is left untouched rather than updated.
-    Returns True if the label was created, False if it already existed.
-    """
-    # Try to get the label first
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    found = {}
+    listed = gh.run_json(
+        ["issue", "list", "-R", f"{owner}/{name}", "--state", "open",
+         "--json", "number,title,url", "--limit", "5000"]
+    ) or []
+    for issue in listed:
+        score = similarity(title, issue["title"])
+        if score >= DUPLICATE_SCORE:
+            found[issue["number"]] = {
+                "ref": f"#{issue['number']}", "title": issue["title"], "state": "OPEN",
+                "score": round(score, 2), "found_by": "title overlap",
+            }
+    warning = None
     try:
-        gh.api(f"repos/{owner}/{repo}/labels/{urllib.parse.quote(name, safe='')}")
-        # Label exists, do nothing
-        return False
-    except gh.GhError:
-        # Label does not exist, create it
-        payload = {"name": name, "color": colour, "description": description}
-        gh.api(f"repos/{owner}/{repo}/labels", method="POST", body=payload)
-        return True
+        hits = gh.api("search/issues", extra_args=[
+            "-X", "GET", "-f", f"q=repo:{owner}/{name} is:issue {title}",
+            "-f", "search_type=hybrid", "-f", "per_page=10",
+        ]) or {}
+    except gh.GhError as error:
+        hits, warning = {}, f"hybrid search failed, so only title overlap was checked: {error}"
+    cutoff = now - datetime.timedelta(days=RECENTLY_CLOSED_DAYS)
+    for item in (hits.get("items") or [])[:5]:
+        if "pull_request" in item or item["number"] in found:
+            continue
+        state = item.get("state", "open").upper()
+        if state == "CLOSED":
+            closed = datetime.datetime.fromisoformat(item["closed_at"].replace("Z", "+00:00"))
+            if closed < cutoff:
+                continue
+        found[item["number"]] = {
+            "ref": f"#{item['number']}", "title": item["title"], "state": state,
+            "score": round(similarity(title, item["title"]), 2), "found_by": "hybrid search",
+        }
+    ordered = sorted(found.values(), key=lambda c: (-c["score"], int(c["ref"][1:])))
+    return ordered, warning
+
+
+def create(owner, name, title, body, issue_type, labels, parent=None, blocked_by=()):
+    """File the issue with gh issue create, and return its Ref."""
+    home = (owner, name)
+    args = ["issue", "create", "-R", f"{owner}/{name}", "--title", title, "--body-file", "-"]
+    for label in labels:
+        args += ["--label", label]
+    if issue_type:
+        args += ["--type", issue_type]
+    if parent is not None:
+        args += ["--parent", parent.gh_arg(home)]
+    if blocked_by:
+        args += ["--blocked-by", ",".join(b.gh_arg(home) for b in blocked_by)]
+    out = gh.run(args, stdin_data=body, write=True)
+    url = out.strip().splitlines()[-1] if out.strip() else ""
+    return ids.from_url(url)
+
+
+def check_filed(ref, title, body, issue_type, labels, parent, blocked_by):
+    """Read the new issue back. Returns (node id, [what is not as asked])."""
+    data = gh.run_json([
+        "issue", "view", str(int(ref.number)), "-R", ref.repo_arg,
+        "--json", "id,number,title,body,labels,issueType,parent,blockedBy",
+    ])
+    if data["number"] != int(ref.number):
+        raise ids.MismatchedIssue(f"asked for {ref}, GitHub returned number {data['number']}")
+    problems = []
+    if data["title"] != title:
+        problems.append(f"the title reads {data['title']!r}")
+    if (data.get("body") or "").strip() != body.strip():
+        problems.append("the body is not the body that was sent")
+    have = {label["name"] for label in data.get("labels") or []}
+    missing = [label for label in labels if label not in have]
+    if missing:
+        problems.append(f"labels missing: {', '.join(missing)}")
+    got_type = (data.get("issueType") or {}).get("name")
+    if issue_type and got_type != issue_type:
+        problems.append(f"the type is {got_type!r}, not {issue_type!r}")
+    got_parent = ids.from_url(data["parent"]["url"]) if data.get("parent") else None
+    if parent is not None and got_parent != parent:
+        problems.append(f"the parent is {got_parent}, not {parent}")
+    got_blockers = {ids.from_url(n["url"]) for n in (data.get("blockedBy") or {}).get("nodes") or []}
+    for blocker in blocked_by:
+        if blocker not in got_blockers:
+            problems.append(f"it is not blocked by {blocker}")
+    return ids.NodeId(data["id"]), problems
+
+
+def repo_labels(owner, name):
+    return {
+        label["name"] for label in
+        gh.run_json(["label", "list", "-R", f"{owner}/{name}", "--json", "name", "--limit", "1000"]) or []
+    }
+
+
+def create_label(owner, name, label, colour, description):
+    gh.run(
+        ["label", "create", label, "-R", f"{owner}/{name}", "--color", colour,
+         "--description", description],
+        write=True,
+    )
+
+
+_TYPES = """
+query DeskworkIssueTypes($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) { issueTypes(first: 50) { nodes { name isEnabled } } }
+}"""
+
+
+def repo_issue_types(owner, name):
+    """The issue types enabled for the repository. Empty for a personal one."""
+    data = gh.graphql(_TYPES, owner=owner, name=name)
+    types = ((data.get("repository") or {}).get("issueTypes") or {}).get("nodes") or []
+    return [t["name"] for t in types if t.get("isEnabled", True)]
+
+
+def open_issues(owner, name):
+    """[(Ref, NodeId)] for every open issue, from one gh issue list."""
+    listed = gh.run_json(
+        ["issue", "list", "-R", f"{owner}/{name}", "--state", "open",
+         "--json", "number,id", "--limit", "5000"]
+    ) or []
+    return [(ids.Ref(owner, name, ids.IssueNumber(i["number"])), ids.NodeId(i["id"])) for i in listed]
 
 
 # One query, paginated, for every open issue and everything review and
