@@ -3,149 +3,30 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
+  # THE ESTATE FLOOR, defined once in dbhq-uk/.github (dbhq-uk/.github#4):
+  # SKILL.md frontmatter parses as YAML and names its directory, plugin.json
+  # parses and carries no version, skill paths are braced, every shell script
+  # passes bash -n and shellcheck, ruff E9,F, and no em or en dashes. The
+  # strict frontmatter parse that started here, duplicate keys and the " #"
+  # that cuts a description short included, is now the floor's. Pinned by
+  # SHA; Dependabot moves the pin.
+  floor:
+    uses: dbhq-uk/.github/.github/workflows/skill-floor.yml@af131df509f44eb9abfe8b37ad6299c11f496c5f
+    with:
+      # The Python is held to the dash rule too, as it was before the floor.
+      dash-files: "*.md *.py"
+
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      # No `version` in plugin.json, on purpose (24 Sep 2026). Claude Code only
-      # updates an installed plugin when this field changes, it was never bumped,
-      # and marketplace installs sat on old code for weeks. With no version the
-      # commit is the version, so every merge to main reaches users.
-      - name: plugin.json carries no version
-        run: jq -e 'has("version") | not' .claude-plugin/plugin.json > /dev/null
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.11"
       - run: python3 -m pip install --quiet pytest
-      # Claude Code reads the frontmatter as YAML, and a SKILL.md it cannot
-      # parse is not loaded at all. So parse it the same way, strictly: an
-      # unquoted ": " in the description, a duplicate key, or a name that is not
-      # the directory's name fails here rather than in somebody's session. A
-      # " #" in a plain description starts a comment and cuts it short with no
-      # error, so that fails too. PyYAML is for this check only; the skill
-      # itself stays standard library.
-      - name: SKILL.md frontmatter is strict YAML, and name matches the directory
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 - <<'PY'
-          import pathlib, re, sys
-          import yaml
-
-          class Strict(yaml.SafeLoader):
-              pass
-
-          def mapping(loader, node, deep=False):
-              seen = set()
-              for key_node, _ in node.value:
-                  key = loader.construct_object(key_node, deep=deep)
-                  if key in seen:
-                      raise yaml.constructor.ConstructorError(
-                          None, None, f"duplicate key {key!r}", key_node.start_mark)
-                  seen.add(key)
-              return loader.construct_mapping(node, deep)
-
-          Strict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, mapping)
-
-          def written(front):
-              # The description as written, when it is a plain scalar: the
-              # first line and any indented lines that continue it.
-              lines = front.splitlines()
-              for i, line in enumerate(lines):
-                  if line.startswith("description:"):
-                      first = line[len("description:"):].strip()
-                      if not first or first[0] in "'\"|>":
-                          return None
-                      rest = []
-                      for more in lines[i + 1:]:
-                          if not more[:1].isspace():
-                              break
-                          rest.append(more)
-                      return " ".join(" ".join([first, *rest]).split())
-              return None
-
-          skills = sorted(pathlib.Path("skills").glob("*/SKILL.md"))
-          if not skills:
-              sys.exit("no skills/*/SKILL.md found")
-          ok = True
-          for skill in skills:
-              def fail(why):
-                  global ok
-                  print(f"{skill}: {why}")
-                  ok = False
-              match = re.match(r"---\n(.*?\n)---\n", skill.read_text(encoding="utf-8"), re.S)
-              if not match:
-                  fail("no frontmatter between --- lines at the top")
-                  continue
-              try:
-                  meta = yaml.load(match.group(1), Loader=Strict)
-              except yaml.YAMLError as error:
-                  fail(f"frontmatter is not valid YAML: {error}")
-                  continue
-              if not isinstance(meta, dict):
-                  fail("frontmatter is not a mapping")
-                  continue
-              for key in ("name", "description"):
-                  if not isinstance(meta.get(key), str) or not meta[key].strip():
-                      fail(f"{key} is missing or empty")
-              if meta.get("name") != skill.parent.name:
-                  fail(f"name is {meta.get('name')!r} but the directory is {skill.parent.name!r}")
-              as_written = written(match.group(1))
-              parsed = " ".join(str(meta.get("description", "")).split())
-              if as_written is not None and as_written != parsed:
-                  fail(f"the description parses as {parsed!r}; a ' #' in it starts a comment")
-          sys.exit(0 if ok else 1)
-          PY
       - run: python3 -m pytest skills/deskwork/tests -q
-      - name: no em dashes
-        run: |
-          if grep -rInP '[\x{2014}\x{2013}]' --include='*.md' --include='*.py' .; then
-            echo "em or en dash found"; exit 1
-          fi
-      # Claude Code substitutes only the braced form in skill content, and does
-      # not set the variable in the shell. An unbraced use runs as
-      # "/scripts/deskwork.py" and every documented command fails. Scoped to
-      # skills/ because install-codex.sh matches the unbraced form on purpose.
-      - name: CLAUDE_SKILL_DIR is braced
-        run: |
-          if grep -rnIF '$CLAUDE_SKILL_DIR' skills/; then
-            echo 'write ${CLAUDE_SKILL_DIR} with braces - Claude Code only substitutes that form'; exit 1
-          fi
       - name: no real identifiers in examples
         run: |
           if grep -rInE '[A-Z]{3,}-[0-9]{3,}' --include='*.md' .; then
             echo "looks like a real ticket id"; exit 1
           fi
-
-  # THE SAME TWO LINTERS IN EVERY DBHQ SKILL REPO, added 17 Sep 2026. Nine of
-  # the fourteen ran no linter at all, in an estate that is mostly bash and
-  # Python - so a shell quoting hazard or a name that does not exist was only
-  # caught by somebody reading the diff.
-  #
-  # IT IS A DELIBERATELY NARROW RUFF SELECTION. `E9` is syntax errors and
-  # `F` is the pyflakes set: undefined names, unused imports, f-strings with no
-  # placeholders. Those are bugs. The full default selection flags import order
-  # and whitespace across every one of these repos, which would have meant
-  # reformatting thousands of lines in code other sessions are working in
-  # before the gate could go green - a large diff to buy a gate that catches
-  # less than this one does. garmin and imager run the full ruff and keep it.
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: shellcheck
-        # -S warning, not the default, because `info` and `style` fire on
-        # idioms these scripts use deliberately. xargs -r so a repo with no
-        # shell scripts is a pass rather than a shellcheck usage error.
-        run: |
-          find . -name '*.sh' -not -path '*/.venv/*' -print0 \
-            | xargs -0 -r shellcheck -S warning
-
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v5
-        with:
-          python-version: "3.11"
-
-      - name: ruff - syntax errors and undefined names
-        run: |
-          pip install --quiet ruff
-          ruff check . --select E9,F --exclude .venv
