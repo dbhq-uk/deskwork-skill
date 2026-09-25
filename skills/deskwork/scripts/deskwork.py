@@ -6,6 +6,7 @@ repository without .github/deskwork.toml carrying enabled = true.
 """
 import argparse
 import datetime
+import json
 import pathlib
 import sys
 
@@ -13,6 +14,7 @@ import board
 import config
 import deps
 import gh
+import git
 import graph
 import ids
 import issues
@@ -20,7 +22,10 @@ import memory
 import repo
 import roadmap
 
-MODES = ("capture", "review", "roadmap", "init", "intake", "doctor")
+MODES = (
+    "capture", "review", "link", "unlink", "reject", "keep",
+    "roadmap", "init", "intake", "doctor",
+)
 
 
 def mode_capture(args, cfg):
@@ -96,122 +101,287 @@ def mode_capture(args, cfg):
     return 0
 
 
-def mode_review(args, cfg):
-    """Read the dependency graph and propose new edges. Write only with confirmation."""
-    owner, repo = args.owner, args.name
+def _home(args):
+    return (args.owner, args.name)
 
-    # Get all open issues
+
+def _read_graph(args, cfg, mode, with_memory=False):
+    """Every open issue, or None after saying why it could not be read."""
     try:
-        all_issues = issues.list_open(owner, repo)
-    except gh.GhError as e:
-        sys.stderr.write(f"review: failed to list issues: {e}\n")
-        return 1
+        return issues.read_graph(args.owner, args.name, cfg.project, with_memory)
+    except gh.GhError as error:
+        if "read:project" in str(error) or "required scopes" in str(error):
+            sys.stderr.write(
+                f"{mode}: reading the board needs the project scope. "
+                "Run: gh auth refresh -s project\n"
+            )
+        else:
+            sys.stderr.write(f"{mode}: cannot read the issues: {error}\n")
+    except issues.IncompleteRead as error:
+        sys.stderr.write(f"{mode}: {error}. Refusing to work from a partial graph.\n")
+    return None
 
-    # Build the existing dependency graph
-    edges = {}
-    for issue_ref in all_issues:
-        ref = ids.Ref(owner, repo, ids.IssueNumber(issue_ref["number"]))
-        edges[ref] = []
 
-    # Get blocked_by relationships
-    for issue_ref in all_issues:
-        ref = ids.Ref(owner, repo, ids.IssueNumber(issue_ref["number"]))
-        try:
-            blockers = deps.blocked_by(ref)
-            edges[ref] = blockers
-        except ids.MismatchedIssue:
-            pass  # Skip if the issue cannot be resolved
+def _shape(found, cfg):
+    """(graph, triage, ready, blocked) for the open issues in found.
 
-    # Read memory for each issue
-    mem = {}
-    for ref in edges:
-        try:
-            mem[ref] = memory.read(ref)
-        except gh.GhError:
-            mem[ref] = memory.Memory()
-
-    # Build the graph
+    A closed blocker blocks nothing, and a Triage issue is neither ready nor
+    blocked: it is unreviewed, and lives only under Triage.
+    """
+    edges = {issue.ref: set(issue.open_blockers) for issue in found}
     g = graph.Graph(edges)
+    triage, ready, blocked = [], [], []
+    for issue in sorted(found, key=lambda i: int(i.ref.number)):
+        if issue.in_triage(cfg.triage_label, cfg.project and cfg.triage_status):
+            triage.append(issue.ref)
+        elif issue.open_blockers:
+            blocked.append(issue.ref)
+        else:
+            ready.append(issue.ref)
+    return g, triage, ready, blocked
 
-    # Present the graph and memory for review
-    sys.stdout.write(f"review: {len(all_issues)} open issues, {len(g.ready())} ready\n")
-    sys.stdout.write(f"review: {len(g.blocked())} blocked, {len(g.cycles())} cycles\n")
-    for cycle in g.cycles():
-        sys.stdout.write(f"  cycle: {' -> '.join(str(r) for r in cycle)}\n")
 
-    # Note: The agent provides reasoning for proposals. This mode gathers
-    # and presents the graph. Proposals and confirmation are agent work.
-    sys.stdout.write("review: graph built. Agent reasoning would propose edges here.\n")
+def mode_review(args, cfg):
+    """Print the graph for the agent to reason over. Writes nothing."""
+    found = _read_graph(args, cfg, "review", with_memory=True)
+    if found is None:
+        return 1
+    home = _home(args)
+    g, triage, ready, blocked = _shape(found, cfg)
+
+    def short(refs):
+        return [ref.short(home) for ref in refs]
+
+    report = {
+        "repository": f"{args.owner}/{args.name}",
+        "open_issues": len(found),
+        "issues": [
+            {
+                "ref": issue.ref.short(home),
+                "title": issue.title,
+                "type": issue.type,
+                "labels": issue.labels,
+                "triage": issue.ref in triage,
+                "parent": issue.parent.short(home) if issue.parent else None,
+                "blocked_by": [
+                    {"ref": b.ref.short(home), "state": b.state, "title": b.title}
+                    for b in issue.blockers
+                ],
+                "memory": memory.as_json(issue.memory or memory.Memory(), home),
+            }
+            for issue in sorted(found, key=lambda i: int(i.ref.number))
+        ],
+        "ready": short(ready),
+        "blocked": short(blocked),
+        "triage": short(triage),
+        "cycles": [short(cycle) for cycle in g.cycles()],
+        "bottlenecks": [{"ref": ref.short(home), "blocks": n} for ref, n in g.bottlenecks()],
+    }
+    if args.json:
+        sys.stdout.write(json.dumps(report, indent=2) + "\n")
+        return 0
+
+    out = [f"review: {report['repository']}, {len(found)} open issues"]
+    for item in report["issues"]:
+        flag = " [triage]" if item["triage"] else ""
+        out.append(f"{item['ref']} {item['title']}{flag}")
+        for b in item["blocked_by"]:
+            out.append(f"    blocked by {b['ref']} ({b['state'].lower()}) {b['title']}".rstrip())
+        for m in item["memory"]:
+            out.append(f"    remembered: {m['decision']} {m['ref']} {m['note']}".rstrip())
+    out.append(f"ready: {', '.join(report['ready']) or 'none'}")
+    out.append(f"blocked: {', '.join(report['blocked']) or 'none'}")
+    out.append(f"triage: {', '.join(report['triage']) or 'none'}")
+    for cycle in report["cycles"]:
+        out.append(f"cycle: {' -> '.join(cycle)}")
+    for b in report["bottlenecks"]:
+        out.append(f"bottleneck: {b['ref']} blocks {b['blocks']} issues")
+    sys.stdout.write("\n".join(out) + "\n")
     return 0
 
 
-def mode_roadmap(args, cfg):
-    """Build the dependency graph and render the roadmap."""
-    owner, repo = args.owner, args.name
-
-    # Get all open issues
+def _edge_args(args, verb):
+    """(ref, blocker) from `VERB 12 --blocked-by 5 --reason "..."`, or None."""
+    if not args.issue or not args.blocked_by:
+        sys.stderr.write(f'{verb}: usage: {verb} ISSUE --blocked-by ISSUE --reason "why"\n')
+        return None
+    if not (args.reason or "").strip():
+        sys.stderr.write(f"{verb}: --reason is required. The reason is recorded on the issue.\n")
+        return None
     try:
-        all_issues = issues.list_open(owner, repo)
-    except gh.GhError as e:
-        sys.stderr.write(f"roadmap: failed to list issues: {e}\n")
+        ref = ids.parse(args.issue, _home(args))
+        blocker = ids.parse(args.blocked_by, _home(args))
+    except ValueError as error:
+        sys.stderr.write(f"{verb}: {error}\n")
+        return None
+    if (ref.owner, ref.repo) != _home(args):
+        sys.stderr.write(f"{verb}: {ref} is in another repository. deskwork edits this repository's issues only.\n")
+        return None
+    if ref == blocker:
+        sys.stderr.write(f"{verb}: an issue cannot block itself.\n")
+        return None
+    return ref, blocker
+
+
+def _edge_verb(args, verb):
+    """link, unlink, reject and keep: one edge, one decision, one reason.
+
+    Run only after a human has approved the decision. The graph write, if any,
+    is read back; so is the memory comment that records the reason.
+    """
+    parsed = _edge_args(args, verb)
+    if parsed is None:
+        return 1
+    ref, blocker = parsed
+    home = _home(args)
+    edge = f"{ref.short(home)} blocked by {blocker.short(home)}"
+    try:
+        current = {b.ref for b in deps.blocked_by(ref)}
+    except (gh.GhError, deps.WriteNotConfirmed, ids.MismatchedIssue) as error:
+        sys.stderr.write(f"{verb}: cannot read {ref.short(home)}: {error}\n")
+        return 1
+    if verb == "reject" and blocker in current:
+        sys.stderr.write(f"reject: {edge} already exists. To remove it, use unlink.\n")
+        return 1
+    if verb == "keep" and blocker not in current:
+        sys.stderr.write(f"keep: {edge} does not exist, so there is nothing to keep.\n")
+        return 1
+    decision = {"link": "linked", "unlink": "unlinked", "reject": "rejected", "keep": "deliberate"}[verb]
+    if args.dry_run:
+        write = {"link": "add the edge", "unlink": "remove the edge"}.get(verb, "leave the graph alone")
+        sys.stdout.write(f"{verb}: would {write} ({edge}) and record '{decision}: {args.reason}'\n")
+        return 0
+    try:
+        if verb == "link":
+            changed = deps.link(ref, blocker)
+        elif verb == "unlink":
+            changed = deps.unlink(ref, blocker)
+        else:
+            changed = False
+    except deps.WriteNotConfirmed as error:
+        sys.stderr.write(f"{verb}: not confirmed. {error}\n")
+        return 4
+    except gh.GhError as error:
+        sys.stderr.write(f"{verb}: gh refused the write: {error}\n")
+        return 1
+    if verb in ("link", "unlink"):
+        sys.stdout.write(
+            f"{verb}: {edge} {'written and read back' if changed else 'was already so'}\n"
+        )
+    try:
+        memory.record(ref, decision, blocker, args.reason)
+    except (memory.WriteNotConfirmed, gh.GhError) as error:
+        sys.stderr.write(f"{verb}: the reason was not recorded on {ref.short(home)}: {error}\n")
+        return 4
+    sys.stdout.write(f"{verb}: recorded on {ref.short(home)}: {decision}: {blocker.short(home)} {args.reason}\n")
+    return 0
+
+
+def mode_link(args, cfg):
+    return _edge_verb(args, "link")
+
+
+def mode_unlink(args, cfg):
+    return _edge_verb(args, "unlink")
+
+
+def mode_reject(args, cfg):
+    return _edge_verb(args, "reject")
+
+
+def mode_keep(args, cfg):
+    return _edge_verb(args, "keep")
+
+
+def _state_of(ref):
+    return gh.run_json(
+        ["issue", "view", str(int(ref.number)), "-R", ref.repo_arg, "--json", "state"]
+    )["state"]
+
+
+def _commit_roadmap(root, relative, issue_count):
+    """Commit the roadmap file alone, then check the commit holds nothing else."""
+    if not git.run(["status", "--porcelain", "--", relative], cwd=root).strip():
+        return None
+    git.run(["add", "--", relative], cwd=root)
+    git.run(
+        ["commit", "--only", "-m", f"docs(roadmap): refresh from {issue_count} open issues",
+         "--", relative],
+        cwd=root,
+    )
+    out = git.run(["log", "-1", "--format=%h", "--name-only"], cwd=root).split()
+    commit, files = out[0], out[1:]
+    if files != [relative]:
+        raise git.GitError(f"commit {commit} touched {files}, expected only {relative}")
+    return commit
+
+
+def mode_roadmap(args, cfg):
+    """Check the agent's order against the graph, render roadmap.md, commit it."""
+    home = _home(args)
+    entries = []
+    if args.order:
+        try:
+            text = sys.stdin.read() if args.order == "-" else pathlib.Path(args.order).read_text()
+            entries, problems = roadmap.load_order(text, home)
+        except (OSError, roadmap.OrderError) as error:
+            sys.stderr.write(f"roadmap: {error}\n")
+            return 1
+    elif not args.dry_run:
+        sys.stderr.write(
+            "roadmap: --order is required to write the roadmap: a JSON list of "
+            '{"ref": "#12", "reason": "why it is next"}, reasoned from review --json. '
+            "Use --dry-run to preview without one.\n"
+        )
+        return 1
+    else:
+        problems = []
+
+    found = _read_graph(args, cfg, "roadmap")
+    if found is None:
+        return 1
+    g, triage, ready, blocked = _shape(found, cfg)
+    by_ref = {issue.ref: issue for issue in found}
+    problems += roadmap.check_order(entries, by_ref, set(triage), home, _state_of)
+    if problems:
+        sys.stderr.write("roadmap: the order was refused, and nothing was written.\n")
+        for problem in problems:
+            sys.stderr.write(f"  {problem}\n")
         return 1
 
-    # Build the dependency graph
-    edges = {}
-    titles = {}
-    reasons = {}
-    for issue_ref in all_issues:
-        ref = ids.Ref(owner, repo, ids.IssueNumber(issue_ref["number"]))
-        edges[ref] = []
-        titles[ref] = issue_ref.get("title", "")
-
-    # Get blocked_by relationships for each issue
-    for issue_ref in all_issues:
-        ref = ids.Ref(owner, repo, ids.IssueNumber(issue_ref["number"]))
-        try:
-            blockers = deps.blocked_by(ref)
-            edges[ref] = blockers
-        except ids.MismatchedIssue:
-            pass  # Skip if the issue cannot be resolved
-
-    # Build the graph
-    g = graph.Graph(edges)
-
-    # Find issues in triage status (agent responsibility to set reasons)
-    triage_issues = []
-    try:
-        board_items = board.items(cfg.project)
-        triage_status = cfg.triage_status
-        for item in board_items:
-            if item.get("content"):
-                content = item["content"]
-                if content["repository"]["owner"]["login"] == owner and content["repository"]["name"] == repo:
-                    # Check if this item is in triage status
-                    for field_val in item.get("fieldValues", {}).get("nodes", []):
-                        if field_val.get("field", {}).get("name") == "Status":
-                            if field_val.get("name") == triage_status:
-                                triage_issues.append(
-                                    ids.Ref(
-                                        content["repository"]["owner"]["login"],
-                                        content["repository"]["name"],
-                                        ids.IssueNumber(content["number"]),
-                                    )
-                                )
-    except board.MissingScope:
-        pass  # If no project scope, just skip triage detection
-
-    # Render the roadmap
-    generated = datetime.date.today()
-    home = f"{owner}/{repo}"
-    rendered = roadmap.render(g, titles, reasons, triage_issues, generated, len(all_issues), home)
-
+    ordered = {ref for ref, _ in entries}
+    titles = {issue.ref: issue.title for issue in found}
+    for issue in found:
+        for b in issue.blockers:
+            titles.setdefault(b.ref, b.title)
+    rendered = roadmap.render(
+        home=home,
+        generated=datetime.date.today(),
+        issue_count=len(found),
+        order=entries,
+        blocked=[(ref, by_ref[ref].open_blockers) for ref in blocked],
+        later=[ref for ref in ready if ref not in ordered],
+        triage=triage,
+        graph=g,
+        titles=titles,
+    )
     if args.dry_run:
         sys.stdout.write(rendered)
-    else:
-        path = args.root / cfg.roadmap
-        path.write_text(rendered)
-        sys.stdout.write(f"roadmap: wrote {cfg.roadmap}\n")
+        return 0
 
+    path = args.root / cfg.roadmap
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(rendered)
+    relative = path.relative_to(args.root).as_posix()
+    try:
+        commit = _commit_roadmap(args.root, relative, len(found))
+    except git.GitError as error:
+        sys.stderr.write(f"roadmap: wrote {relative} and could not commit it: {error}\n")
+        return 1
+    if commit is None:
+        sys.stdout.write(f"roadmap: {relative} is unchanged, nothing to commit\n")
+    else:
+        sys.stdout.write(f"roadmap: wrote {relative} and committed it alone as {commit}\n")
     return 0
 
 
@@ -391,10 +561,15 @@ def mode_doctor(args, cfg):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="deskwork")
     parser.add_argument("mode", choices=MODES)
+    parser.add_argument("issue", nargs="?", help="the issue a link, unlink, reject or keep is about")
     parser.add_argument("--repo", default=".", type=pathlib.Path)
     parser.add_argument("--title")
     parser.add_argument("--type", dest="issue_type")
     parser.add_argument("--area")
+    parser.add_argument("--blocked-by", help="the blocking issue: 12, #12, owner/repo#12 or a URL")
+    parser.add_argument("--reason", help="why, recorded on the issue")
+    parser.add_argument("--order", help='roadmap: JSON file (or - for stdin) of {"ref", "reason"}')
+    parser.add_argument("--json", action="store_true", help="review: print JSON")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 

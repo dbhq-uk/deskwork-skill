@@ -37,7 +37,7 @@ constraint hold itself rather than depend on restraint. `gh.py` also refuses,
 before `gh` starts, any call that would close, delete or transfer an issue:
 `gh issue close|delete|transfer`, a `closeIssue`, `deleteIssue`,
 `transferIssue` or `updateIssue` mutation, a write to an issue carrying
-`state`, and any `DELETE` except removing a dependency edge.
+`state`, and any `DELETE`.
 
 **2. Agents write only to Triage.** Never assigned, never prioritised, never
 `Next` or `In Progress`, and never into the roadmap. Nothing filed unreviewed
@@ -62,8 +62,9 @@ Context or Proposal section.
 **6. Nothing is inferred into the graph.** An edge exists because it was
 proposed and accepted. The reasoning is recorded with it. The `review` mode
 gathers the existing graph, the agent proposes edges, and writes happen only
-after human approval. `roadmap` renders what exists; it does not compute or
-infer.
+after human approval, one decision per `link`, `unlink`, `reject` or `keep`.
+`roadmap` renders the order the agent reasoned, after checking it against the
+live graph; it does not compute an order or infer one.
 
 **7. No credential file.** `gh auth` is the credential. There is no
 `~/.dbhq/deskwork/`, nothing to leak, and nothing to migrate. Session state is
@@ -73,21 +74,22 @@ reconstructed from git and GitHub rather than cached.
 packages, no venv. This is why the config is TOML - `tomllib` is in the
 stdlib and no YAML parser is. Same line `buildwork` holds.
 
-## The three-identifier hazard
+## The identifier hazard
 
-**This is the project's central one.** One GitHub issue carries three different identifiers and none is interchangeable:
+**This is the project's central one.** One GitHub issue carries several identifiers and none is interchangeable:
 
 | Identifier | Looks like | Used by |
 |---|---|---|
-| Issue number | `144` | humans, URLs, REST paths |
-| Database id | `3527190001` | dependencies API `issue_id` field |
+| Issue number | `144` | humans, URLs, `gh issue` commands |
+| Database id | `3527190001` | the REST dependencies API's `issue_id` field |
 | GraphQL node id | `"I_kwDOAbc123"` | every Projects v2 mutation |
 
-**The hazard:** Pass an issue number where a database id belongs - `gh api .../issues/144/dependencies/blocked_by` with `issue_id: 144` - and GitHub silently links a different issue in a different repository. The call succeeds. Nothing downstream notices. This is why:
+**The hazard:** Pass an issue number where a database id belongs - `gh api .../issues/144/dependencies/blocked_by` with `issue_id: 144` - and GitHub silently links a different issue in a different repository. The call succeeds. Nothing downstream notices. So deskwork does not use that API at all:
 
-- Every write resolves the number to a database ID first via `GET /repos/{owner}/{repo}/issues/{n}`.
-- No function takes an ambiguous integer - `IssueId` and `NodeId` are distinct Python types.
-- After a write, the edge is read back and confirmed to point where it was meant to.
+- Edges are written with `gh issue edit N --add-blocked-by M` and `--remove-blocked-by M`. gh takes the number (or, across repositories, the issue URL) and resolves it itself. No database id is ever handled, and no module has a type or a function for one.
+- After every edge write the edge list is read back. If it shows anything other than what was asked for, the write is reported as not confirmed, naming the edge that is there and the command that removes it.
+- `gh.py` refuses every `DELETE`, so the old REST removal path cannot come back quietly.
+- `NodeId` is a distinct Python type, and `require_node_id` refuses a bare string.
 
 Anybody changing code that touches GitHub edges needs this on the page before they start.
 

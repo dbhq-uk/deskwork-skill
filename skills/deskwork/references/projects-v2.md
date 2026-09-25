@@ -4,19 +4,15 @@ Projects v2 is GraphQL only - there is no REST equivalent. All interactions flow
 
 ## Identifiers
 
-One GitHub issue carries three different identifiers and none of them is interchangeable:
+One GitHub issue carries several identifiers and none of them is interchangeable:
 
 | Identifier | Looks like | Used by |
 |---|---|---|
-| Issue number | `144` | humans, URLs, the REST path |
-| Database id, `IssueId(int)` | `3527190001` | the dependencies API `issue_id` field |
-| GraphQL node id, `NodeId(str)` | `"I_kwDOAbc123"` | every Projects v2 mutation |
+| Issue number | `144` | humans, URLs, `gh issue` commands |
+| Database id | `3527190001` | the REST dependencies API, which deskwork does not use |
+| GraphQL node id | `"I_kwDOAbc123"` | every Projects v2 mutation |
 
-Always use the right type for the right call:
-- REST API (issues, dependencies) takes an issue number or database id
-- Projects v2 mutations take GraphQL node id
-
-The type system prevents confusion: `IssueId` and `NodeId` are distinct types, and passing one where the other belongs raises `TypeError`. Fetch the right identifier with `ids.resolve()` (for database id) or `ids.node_id()` (for GraphQL node id).
+Dependency edges go through `gh issue edit --add-blocked-by` and `--remove-blocked-by`, which take the issue number and resolve it inside gh. The REST dependencies API takes a database id, links a different issue when handed a number, and still returns 201, so deskwork never calls it. Projects v2 mutations take the node id, which deskwork reads from `gh issue view --json id` and checks against the number it asked for.
 
 ## Projects must be addressed by node id
 

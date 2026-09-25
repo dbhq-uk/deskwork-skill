@@ -22,6 +22,7 @@ class Config:
     issue_types: list
     area_labels: list
     triage_status: str
+    triage_label: str = "triage"
     effort: list = field(default_factory=list)
     risk: list = field(default_factory=list)
 
@@ -66,6 +67,7 @@ def load(repo_root):
         issue_types=data.get("issue_types", []),
         area_labels=data.get("labels", {}).get("area", []),
         triage_status=fields.get("Status", "Triage"),
+        triage_label=data.get("triage_label", "triage"),
         effort=fields.get("Effort", []),
         risk=fields.get("Risk", []),
     )

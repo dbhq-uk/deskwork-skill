@@ -1,101 +1,151 @@
-"""Render roadmap.md, in the root of the repository.
+"""Check an agent's order against the live graph, and render roadmap.md.
 
-The order is reasoned rather than computed, so it will differ between runs.
-The file is therefore built to be reviewed: it says when it was made, what it
-was made from, and why each ordering call was made.
+The order is reasoned by the agent, not computed here. This module takes that
+order as given, refuses any entry that cannot honestly be called next, and
+writes the file with the reason under each item. buildwork reads the result,
+so the shape it depends on is fixed:
+
+- the headings ## Next, ## Blocked and ## Triage
+- an entry is a list item whose first issue reference is the issue, as in
+  `1. **#12** Title`
+- the reason sits on its own indented line starting "Why:", so it can never
+  be read as a list item of its own
+
+Next holds only what was ordered. Anything ready that was not ordered goes
+under ## Later, which buildwork holds rather than runs.
 """
+import json
+
+import ids
 
 
-def _parse_home(home):
-    """Parse home parameter into (owner, repo).
+class OrderError(Exception):
+    """The order file cannot be read at all."""
 
-    Accepts either a tuple/list of (owner, repo) or a string "owner/repo".
+
+def load_order(text, home):
+    """[(Ref, reason)] from JSON: a list of {"ref": "#12", "reason": "..."}."""
+    try:
+        data = json.loads(text)
+    except ValueError as error:
+        raise OrderError(f"the order is not valid JSON ({error})") from error
+    if not isinstance(data, list):
+        raise OrderError('the order must be a JSON list of {"ref": "#12", "reason": "..."}')
+    entries, problems = [], []
+    for position, item in enumerate(data, start=1):
+        if not isinstance(item, dict) or "ref" not in item:
+            problems.append(f"entry {position} has no ref")
+            continue
+        try:
+            ref = ids.parse(item["ref"], home)
+        except ValueError as error:
+            problems.append(f"entry {position}: {error}")
+            continue
+        reason = " ".join(str(item.get("reason") or "").split())
+        entries.append((ref, reason))
+    return entries, problems
+
+
+def check_order(entries, issues, triage, home, state_of):
+    """Every reason an entry cannot go under Next, naming the issue each time.
+
+    issues maps Ref to issues.Issue for every open issue in the repository.
+    state_of(ref) returns GitHub's state for an issue that is not in issues.
     """
-    if isinstance(home, str):
-        owner, repo = home.split("/")
-        return (owner, repo)
-    return tuple(home)
+    problems, seen = [], set()
+    for ref, reason in entries:
+        name = ref.short(home)
+        if (ref.owner, ref.repo) != tuple(home):
+            problems.append(f"{name} is in another repository. The roadmap orders this repository's issues only.")
+            continue
+        if ref in seen:
+            problems.append(f"{name} is in the order twice.")
+            continue
+        seen.add(ref)
+        if not reason:
+            problems.append(f"{name} has no reason. Every entry under Next says why it is there.")
+        if ref not in issues:
+            try:
+                state = state_of(ref)
+            except Exception:  # any failure means it cannot be vouched for
+                state = None
+            if state == "CLOSED":
+                problems.append(f"{name} is closed.")
+            else:
+                problems.append(f"{name} is not an open issue in {home[0]}/{home[1]}.")
+            continue
+        if ref in triage:
+            problems.append(
+                f"{name} is still in Triage. A human moves it out before it can be ordered."
+            )
+        open_blockers = issues[ref].open_blockers
+        if open_blockers:
+            names = ", ".join(b.short(home) for b in sorted(open_blockers, key=str))
+            problems.append(f"{name} is blocked by {names}, which is still open.")
+    return problems
 
 
-def _format_ref(ref, home_owner, home_repo):
-    """Format a Ref for display in the roadmap.
+def render(*, home, generated, issue_count, order, blocked, later, triage, graph, titles):
+    """The roadmap as markdown.
 
-    Same-repo references render as #number.
-    Cross-repo references render as owner/repo#number.
-    Per-reference formatting ensures adding a cross-repo blocker does not
-    change the format of every other issue, keeping diffs reviewable.
+    order: [(Ref, reason)] as the agent gave it, already checked.
+    blocked: [(Ref, [open blocker Refs])], not in Triage.
+    later: [Ref] ready and not in Triage, and not ordered this time.
+    triage: [Ref] filed and not yet reviewed.
     """
-    if ref.owner == home_owner and ref.repo == home_repo:
-        return f"#{int(ref.number)}"
-    return str(ref)
-
-
-def render(g, titles, reasons, triage, generated, issue_count, home):
-    """Render a roadmap.
-
-    Args:
-        g: The dependency graph (Graph object)
-        titles: Dict mapping Ref to title string
-        reasons: Dict mapping Ref to reasoning string
-        triage: List of Ref objects in triage (unreviewed)
-        generated: datetime.date of when this was generated
-        issue_count: Total count of open issues
-        home: Home repository as tuple (owner, repo) or string "owner/repo"
-
-    Returns:
-        Complete markdown roadmap as a string
-    """
-    home_owner, home_repo = _parse_home(home)
-
     def fmt(ref):
-        return _format_ref(ref, home_owner, home_repo)
+        return ref.short(home)
+
+    def title(ref):
+        return titles.get(ref, "")
 
     out = ["# Roadmap", ""]
+    out.append(f"Generated by deskwork on {generated.isoformat()} from {issue_count} open issues.")
     out.append(
-        f"Generated by deskwork on {generated.isoformat()} "
-        f"from {issue_count} open issues."
-    )
-    out.append(
-        "Order is reasoned, not computed. Every dependency shown is a declared "
-        "GitHub link."
+        "Next is the order an agent reasoned, with the reason under each item. "
+        "Every dependency shown is a declared GitHub link."
     )
     out.append("")
 
     out.append("## Next")
     out.append("")
-    ready = g.ready()
-    if not ready:
-        out.append("Nothing is ready. Everything open is blocked.")
+    if not order:
+        out.append("Nothing is ordered yet.")
         out.append("")
-    for position, ref in enumerate(ready, start=1):
-        out.append(f"{position}. **{fmt(ref)}** {titles.get(ref, '')}".rstrip())
-        reason = reasons.get(ref)
-        if reason:
-            out.append(f"   {reason}")
-    out.append("")
+    for position, (ref, reason) in enumerate(order, start=1):
+        out.append(f"{position}. **{fmt(ref)}** {title(ref)}".rstrip())
+        out.append(f"   Why: {reason}")
+    if order:
+        out.append("")
 
-    blocked = g.blocked()
     if blocked:
         out.append("## Blocked")
         out.append("")
-        for ref in blocked:
-            blockers = ", ".join(
-                f"blocked by {fmt(b)}" for b in sorted(g.edges[ref], key=str)
-            )
-            out.append(f"- **{fmt(ref)}** {titles.get(ref, '')} - {blockers}")
+        for ref, blockers in blocked:
+            by = ", ".join(f"blocked by {fmt(b)}" for b in sorted(blockers, key=str))
+            out.append(f"- **{fmt(ref)}** {title(ref)} - {by}")
         out.append("")
 
-    cycles = g.cycles()
+    if later:
+        out.append("## Later")
+        out.append("")
+        out.append("Ready, and not ordered this time.")
+        out.append("")
+        for ref in later:
+            out.append(f"- **{fmt(ref)}** {title(ref)}".rstrip())
+        out.append("")
+
+    cycles = graph.cycles()
     if cycles:
         out.append("## Cycles")
         out.append("")
-        out.append("These block each other. Nothing can be ordered until one link goes.")
+        out.append("These block each other. Nothing in a cycle can start until one link goes.")
         out.append("")
         for cycle in cycles:
             out.append("- " + " -> ".join(fmt(node) for node in cycle))
         out.append("")
 
-    bottlenecks = g.bottlenecks()
+    bottlenecks = graph.bottlenecks()
     if bottlenecks:
         out.append("## Bottlenecks")
         out.append("")
@@ -103,7 +153,7 @@ def render(g, titles, reasons, triage, generated, issue_count, home):
             out.append(f"- **{fmt(ref)}** blocks {count} issues")
         out.append("")
 
-    out.append("## Triage - not yet in the roadmap")
+    out.append("## Triage")
     out.append("")
     out.append(
         "Filed by an agent and not yet reviewed. Listed, never ordered."
@@ -111,5 +161,5 @@ def render(g, titles, reasons, triage, generated, issue_count, home):
     )
     out.append("")
     for ref in triage:
-        out.append(f"- {fmt(ref)} {titles.get(ref, '')}".rstrip())
+        out.append(f"- **{fmt(ref)}** {title(ref)}".rstrip())
     return "\n".join(out).rstrip() + "\n"

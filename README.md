@@ -79,7 +79,7 @@ python3 ~/.claude/skills/deskwork/scripts/deskwork.py init
 
 Full field reference: [`skills/deskwork/references/projects-v2.md`](skills/deskwork/references/projects-v2.md).
 
-## The six modes
+## The modes
 
 All require the working directory to be inside a git repository with `deskwork.toml` present and `enabled = true`. Any directory in the repository works, including a subdirectory or a git worktree. Issues go to the repository the `origin` remote points at.
 
@@ -97,18 +97,27 @@ Searches for similar issues and shows them to you, creates the issue if you proc
 ### review - reconcile the dependency graph
 
 ```bash
-python3 ~/.claude/skills/deskwork/scripts/deskwork.py review
+python3 ~/.claude/skills/deskwork/scripts/deskwork.py review --json
 ```
 
-Reads every open issue and its existing dependency links. Reports what is ready to start, what is blocked, any cycles, and decomposition candidates (large issues that might split). An agent reasons about what should block what; you review and approve; the script writes on approval.
-
-### roadmap - render the roadmap
+Reads every open issue in one query and prints the graph: each issue's blockers with their state, whether it is still in Triage, what a human already decided about its edges, and any cycles and bottlenecks. It writes nothing. An agent reasons about what should block what; you approve or reject each proposal; then one of four verbs records your answer:
 
 ```bash
-python3 ~/.claude/skills/deskwork/scripts/deskwork.py roadmap
+deskwork.py link 12 --blocked-by 5 --reason "The migration needs the schema"
+deskwork.py unlink 12 --blocked-by 5 --reason "No longer needed"
+deskwork.py reject 12 --blocked-by 5 --reason "Different areas"
+deskwork.py keep 12 --blocked-by 5 --reason "Order matters here"
 ```
 
-Builds the dependency graph and renders `roadmap.md` in the repository root. The roadmap shows what is ready, what is blocked, and what is still in Triage (not yet reasoned). Every dependency shown is a declared GitHub link.
+`link` and `unlink` write through `gh issue edit` and read the edge back. All four record the decision and its reason in one comment on the issue, so a rejected edge is not proposed again.
+
+### roadmap - write the order, with reasons
+
+```bash
+python3 ~/.claude/skills/deskwork/scripts/deskwork.py roadmap --order order.json
+```
+
+Takes the order an agent reasoned, as a list of `{"ref": "#7", "reason": "..."}`, and checks it against the live graph. An entry that is closed, still in Triage or blocked is refused by name, and nothing is written. Otherwise it writes `roadmap.md` with the reason under each item under `## Next`, lists what is blocked, ready but not ordered, and still in Triage, and commits the file alone.
 
 ### init - set up the board
 
@@ -160,13 +169,13 @@ The project is stored by node ID, not title. Titles are not unique; an unlinked 
 
 ## Testing
 
-All six modes, the config parser, graph construction, cycle detection, bottleneck finding and roadmap rendering are tested without touching GitHub. Tests run against a fake `gh` shim that returns canned JSON.
+The config parser, graph construction, cycle detection, bottleneck finding and roadmap rendering are tested without touching GitHub. `review`, `roadmap`, `link`, `unlink`, `reject` and `keep` also run end to end against a fake `gh` that keeps a small GitHub in a file and changes it on every write, so a test can check the write, the read-back and the comment.
 
 ```bash
 python3 -m pytest skills/deskwork/tests -q
 ```
 
-The fixtures deliberately include the cases most likely to produce plausible wrong answers: a cross-repository dependency edge, an issue blocking three others, an issue whose blocker has closed, a cycle in the graph, and the database-ID trap that the type system in `ids.py` exists to prevent.
+The fixtures deliberately include the cases most likely to produce plausible wrong answers: a cross-repository dependency edge, an issue blocking three others, an issue whose blocker has closed, a Triage issue that is also blocked, a cycle in the graph, and a link that GitHub reports as written but that landed on a different issue.
 
 **Honesty note:** No mode has ever been run against a live GitHub Project, because the `project` token scope is not granted on this machine. The logic is tested; the wiring against a real Projects v2 board is not. The code is there, the patterns are sound, but a first deployment should begin with `init` on a test repository and a human watching the board.
 
