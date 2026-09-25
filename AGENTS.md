@@ -126,7 +126,7 @@ bash -n install.sh install-codex.sh
 jq empty .claude-plugin/plugin.json
 python3 -m pytest skills/deskwork/tests -q
 grep -rInP '[\x{2014}\x{2013}]' --include='*.md' --include='*.py' --include='*.sh' . && echo "FAIL: dash found" || echo "clean"
-grep -rnF '$CLAUDE_SKILL_DIR' skills/ && echo "FAIL: unbraced" || echo "braced"
+grep -rnIF '$CLAUDE_SKILL_DIR' skills/ && echo "FAIL: unbraced" || echo "braced"
 grep -rn '/home/\|~/.claude/skills' skills/deskwork/SKILL.md && echo "FAIL: hardcoded path" || echo "no hardcoded paths"
 ```
 

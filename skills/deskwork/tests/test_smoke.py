@@ -17,7 +17,9 @@ def test_skill_dir_is_always_braced():
     """Claude Code substitutes ${CLAUDE_SKILL_DIR} in skill content, and only
     that form. The unbraced form reaches the shell, where the variable is not
     set, so the command runs "/scripts/deskwork.py" and fails."""
-    unbraced = "$" + "CLAUDE_SKILL_DIR"
+    # Joined at run time: a constant "$" + "..." is folded into the .pyc,
+    # and the CI grep would then find it there.
+    unbraced = "".join(["$", "CLAUDE_SKILL_DIR"])
     found = [
         f"{path.relative_to(ROOT)}:{number}"
         for path in sorted((ROOT / "skills").rglob("*"))

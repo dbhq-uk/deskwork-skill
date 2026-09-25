@@ -29,7 +29,7 @@ jobs:
       # skills/ because install-codex.sh matches the unbraced form on purpose.
       - name: CLAUDE_SKILL_DIR is braced
         run: |
-          if grep -rnF '$CLAUDE_SKILL_DIR' skills/; then
+          if grep -rnIF '$CLAUDE_SKILL_DIR' skills/; then
             echo 'write ${CLAUDE_SKILL_DIR} with braces - Claude Code only substitutes that form'; exit 1
           fi
       - name: no real identifiers in examples
