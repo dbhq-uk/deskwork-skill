@@ -1,47 +1,67 @@
 import datetime
-import pathlib
-import sys
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
+import pytest
 
-import graph  # noqa: E402
-import ids  # noqa: E402
-import roadmap  # noqa: E402
+import graph
+import ids
+import roadmap
+
+HOME = ("owner", "repo")
 
 
-def ref(owner, repo, n):
+def ref(n, owner="owner", repo="repo"):
     return ids.Ref(owner, repo, ids.IssueNumber(n))
 
 
-def build():
-    return roadmap.render(
-        graph.Graph({ref("owner", "repo", 144): {ref("owner", "repo", 143)}, ref("owner", "repo", 143): set()}),
-        titles={ref("owner", "repo", 143): "Register drift", ref("owner", "repo", 144): "Positioning changed"},
-        reasons={ref("owner", "repo", 143): "Nothing blocks it, and #144 cannot start until it lands."},
-        triage=[ref("owner", "repo", 146)],
+def build(**overrides):
+    args = dict(
+        home=HOME,
         generated=datetime.date(2026, 9, 17),
-        issue_count=3,
-        home=("owner", "repo"),
+        issue_count=4,
+        order=[(ref(143), "Nothing blocks it, and #144 cannot start until it lands.")],
+        blocked=[(ref(144), [ref(143)])],
+        later=[ref(145)],
+        triage=[ref(146)],
+        graph=graph.Graph({ref(144): {ref(143)}, ref(143): set()}),
+        titles={ref(143): "Register drift", ref(144): "Positioning changed",
+                ref(145): "Tidy", ref(146): "Found while testing"},
     )
+    args.update(overrides)
+    return roadmap.render(**args)
 
 
 def test_it_states_when_and_from_what():
-    assert "2026-09-17" in build()
-    assert "3 open issues" in build()
+    text = build()
+    assert "2026-09-17" in text and "4 open issues" in text
 
 
-def test_it_says_the_order_is_reasoned_not_computed():
-    assert "reasoned" in build().lower()
+def test_the_order_is_kept_and_each_reason_sits_under_its_item():
+    text = build(order=[(ref(145), "Small and unblocks review."), (ref(143), "Then the drift.")], later=[])
+    lines = text.splitlines()
+    first = lines.index("1. **#145** Tidy")
+    assert lines[first + 1] == "   Why: Small and unblocks review."
+    second = lines.index("2. **#143** Register drift")
+    assert lines[second + 1] == "   Why: Then the drift."
+
+
+def test_the_headings_buildwork_reads_are_exact():
+    text = build()
+    for heading in ("## Next", "## Blocked", "## Triage"):
+        assert heading in text.splitlines()
 
 
 def test_a_blocked_item_shows_its_blocker():
-    assert "blocked by #143" in build()
+    assert "- **#144** Positioning changed - blocked by #143" in build()
 
 
-def test_triage_is_listed_but_not_ordered():
+def test_triage_is_listed_last_and_never_numbered():
     text = build()
-    assert "#146" in text
     assert text.index("## Triage") > text.index("## Next")
+    assert "- **#146** Found while testing" in text
+
+
+def test_nothing_ordered_is_said_plainly():
+    assert "Nothing is ordered yet." in build(order=[])
 
 
 def test_no_em_dashes():
@@ -50,78 +70,24 @@ def test_no_em_dashes():
     assert "\u2014" not in build() and "\u2013" not in build()
 
 
-def test_same_repo_and_cross_repo_in_one_document():
-    """Same-repo references render as #N, cross-repo as owner/repo#N."""
-    output = roadmap.render(
-        graph.Graph({
-            ref("owner", "repo", 1): {ref("other", "lib", 99)},
-            ref("other", "lib", 99): set(),
-        }),
-        titles={
-            ref("owner", "repo", 1): "First task",
-            ref("other", "lib", 99): "External blocker",
-        },
-        reasons={ref("other", "lib", 99): "Ready to go."},
-        triage=[],
-        generated=datetime.date(2026, 9, 17),
-        issue_count=2,
-        home=("owner", "repo"),
-    )
-    # Cross-repo ready issue uses full format
-    assert "1. **other/lib#99**" in output
-    # Same-repo blocked issue uses short format
-    assert "- **#1**" in output
-    # Cross-repo blocker uses full format
-    assert "blocked by other/lib#99" in output
+def test_cross_repo_references_keep_their_repository():
+    text = build(blocked=[(ref(1), [ref(99, "other", "lib")])], order=[], later=[], triage=[],
+                 titles={ref(1): "First task"},
+                 graph=graph.Graph({ref(1): {ref(99, "other", "lib")}}))
+    assert "- **#1** First task - blocked by other/lib#99" in text
 
 
-def test_output_stability_when_adding_cross_repo_blocker():
-    """Adding a cross-repo blocker should not change format of existing lines.
+def test_load_order_reads_refs_and_reasons():
+    entries, problems = roadmap.load_order('[{"ref": "#12", "reason": "first"}, {"ref": 7, "reason": "then"}]', HOME)
+    assert entries == [(ref(12), "first"), (ref(7), "then")] and problems == []
 
-    Regression test: when a cross-repo blocker is added, same-repo references
-    must continue to use short format, not switch to full format. This ensures
-    adding a single dependency edge does not produce spurious diffs in all lines.
-    """
-    # First render: all same-repo
-    edges1 = {
-        ref("owner", "repo", 2): {ref("owner", "repo", 1)},
-        ref("owner", "repo", 1): set(),
-    }
-    output1 = roadmap.render(
-        graph.Graph(edges1),
-        titles={
-            ref("owner", "repo", 1): "First",
-            ref("owner", "repo", 2): "Second",
-        },
-        reasons={ref("owner", "repo", 1): "Nothing blocks it."},
-        triage=[],
-        generated=datetime.date(2026, 9, 17),
-        issue_count=3,
-        home=("owner", "repo"),
-    )
 
-    # Second render: add a cross-repo blocker for #1
-    edges2 = {
-        ref("owner", "repo", 2): {ref("owner", "repo", 1)},
-        ref("owner", "repo", 1): {ref("other", "lib", 50)},
-        ref("other", "lib", 50): set(),
-    }
-    output2 = roadmap.render(
-        graph.Graph(edges2),
-        titles={
-            ref("owner", "repo", 1): "First",
-            ref("owner", "repo", 2): "Second",
-            ref("other", "lib", 50): "External blocker",
-        },
-        reasons={ref("other", "lib", 50): "Ready."},
-        triage=[],
-        generated=datetime.date(2026, 9, 17),
-        issue_count=3,
-        home=("owner", "repo"),
-    )
+@pytest.mark.parametrize("text", ["not json", '{"ref": "#1"}'])
+def test_an_unreadable_order_is_an_error(text):
+    with pytest.raises(roadmap.OrderError):
+        roadmap.load_order(text, HOME)
 
-    # Verify same-repo references stay in short format in both outputs.
-    # The key property: #2 blocks #1, and this line must appear identically in
-    # both renders, proving per-reference formatting does not change with document contents.
-    assert "- **#2** Second - blocked by #1" in output1
-    assert "- **#2** Second - blocked by #1" in output2
+
+def test_entries_without_a_ref_are_problems():
+    entries, problems = roadmap.load_order('[{"reason": "x"}, {"ref": "nope", "reason": "y"}]', HOME)
+    assert entries == [] and len(problems) == 2

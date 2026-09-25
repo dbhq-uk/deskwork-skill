@@ -33,7 +33,6 @@ class TooOld(Exception):
 _ISSUE_VERBS = {"close", "delete", "transfer"}
 _MUTATIONS = re.compile(r"\b(closeIssue|deleteIssue|transferIssue|updateIssue)\b")
 _ISSUE_PATH = re.compile(r"^/?repos/[^/]+/[^/]+/issues/\d+/?$")
-_DEPENDENCY_REMOVAL = re.compile(r"^/?repos/[^/]+/[^/]+/issues/\d+/dependencies/blocked_by/\d+$")
 _STATE_KEYS = {"state", "state_reason"}
 
 
@@ -108,7 +107,9 @@ def _guard(args, stdin_data):
         return
     method = _api_method(args)
     path = _api_path(args)
-    if method == "DELETE" and not _DEPENDENCY_REMOVAL.match(path):
+    if method == "DELETE":
+        # Nothing deskwork does needs DELETE. Edges come off through
+        # gh issue edit --remove-blocked-by.
         _refuse(f"DELETE {path}")
     if path == "graphql":
         if _MUTATIONS.search(_graphql_text(args, stdin_data)):

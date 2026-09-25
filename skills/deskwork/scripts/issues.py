@@ -5,9 +5,12 @@ Issue types are the canonical GitHub categorisation; labels are the fallback
 for an organisation that has not configured them.
 """
 import urllib.parse
+from dataclasses import dataclass, field
 
+import deps
 import gh
 import ids
+import memory
 
 _SECTIONS = {
     "Bug": ["Context", "Expected", "Actual", "Acceptance"],
@@ -143,3 +146,110 @@ def ensure_label(owner, repo, name, colour, description):
         payload = {"name": name, "color": colour, "description": description}
         gh.api(f"repos/{owner}/{repo}/labels", method="POST", body=payload)
         return True
+
+
+# One query, paginated, for every open issue and everything review and
+# roadmap need about it. The call count does not grow with the number of
+# issues until a page fills, where the old path made two calls per issue.
+GRAPH_PAGE = 50
+_GRAPH = """
+query DeskworkGraph($owner: String!, $name: String!, $after: String,
+                    $comments: Boolean!, $board: Boolean!) {
+  repository(owner: $owner, name: $name) {
+    issues(first: %d, after: $after, states: [OPEN],
+           orderBy: {field: CREATED_AT, direction: ASC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number title url
+        issueType { name }
+        labels(first: 100) { nodes { name } }
+        parent { url }
+        blockedBy(first: 100) { totalCount nodes { title state url } }
+        comments(first: 100) @include(if: $comments) { totalCount nodes { body } }
+        projectItems(first: 20) @include(if: $board) {
+          nodes {
+            project { id }
+            fieldValueByName(name: "Status") {
+              ... on ProjectV2ItemFieldSingleSelectValue { name }
+            }
+          }
+        }
+      }
+    }
+  }
+}""" % GRAPH_PAGE
+
+
+class IncompleteRead(Exception):
+    """GitHub returned fewer items than it says exist. Refuse to act on it."""
+
+
+@dataclass
+class Issue:
+    ref: ids.Ref
+    title: str
+    type: str = None
+    labels: list = field(default_factory=list)
+    parent: ids.Ref = None
+    blockers: list = field(default_factory=list)  # deps.Blocker, open and closed
+    board_status: str = None
+    memory: "memory.Memory" = None
+
+    @property
+    def open_blockers(self):
+        return [b.ref for b in self.blockers if b.state == "OPEN"]
+
+    def in_triage(self, triage_label, triage_status=None):
+        """Filed and not yet reviewed: the Triage label, or Triage on the board."""
+        if triage_label and triage_label in self.labels:
+            return True
+        return bool(triage_status) and self.board_status == triage_status
+
+
+def _issue(node, project, with_memory):
+    ref = ids.from_url(node["url"])
+    blocked = node.get("blockedBy") or {}
+    nodes = blocked.get("nodes") or []
+    if blocked.get("totalCount", len(nodes)) != len(nodes):
+        raise IncompleteRead(f"{ref}: {blocked['totalCount']} blockers, {len(nodes)} returned")
+    status = None
+    for item in (node.get("projectItems") or {}).get("nodes") or []:
+        if (item.get("project") or {}).get("id") == project:
+            status = (item.get("fieldValueByName") or {}).get("name")
+    mem = None
+    if with_memory:
+        comments = node.get("comments") or {}
+        bodies = [c.get("body") or "" for c in comments.get("nodes") or []]
+        marked = next((b for b in bodies if memory.MARKER in b), None)
+        if marked is None and comments.get("totalCount", 0) > len(bodies):
+            mem = memory.read(ref)  # the marker is past the first page
+        else:
+            mem = memory.parse(marked or "")
+    return Issue(
+        ref=ref,
+        title=node.get("title", ""),
+        type=(node.get("issueType") or {}).get("name"),
+        labels=[label["name"] for label in (node.get("labels") or {}).get("nodes") or []],
+        parent=ids.from_url(node["parent"]["url"]) if node.get("parent") else None,
+        blockers=[
+            deps.Blocker(ids.from_url(b["url"]), b.get("state", "OPEN"), b.get("title", ""))
+            for b in nodes
+        ],
+        board_status=status,
+        memory=mem,
+    )
+
+
+def read_graph(owner, name, project=None, with_memory=False):
+    """Every open issue in owner/name, with its blockers and their state."""
+    found, after = [], None
+    while True:
+        data = gh.graphql(
+            _GRAPH, owner=owner, name=name, after=after,
+            comments=bool(with_memory), board=bool(project),
+        )
+        page = data["repository"]["issues"]
+        found.extend(_issue(node, project, with_memory) for node in page["nodes"])
+        if not page["pageInfo"]["hasNextPage"]:
+            return found
+        after = page["pageInfo"]["endCursor"]

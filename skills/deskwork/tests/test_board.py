@@ -15,9 +15,9 @@ def test_add_item_requires_a_node_id():
         board.add_item("PVT_x", ids.IssueNumber(144))
 
 
-def test_add_item_refuses_an_issue_id():
+def test_add_item_refuses_a_bare_string():
     with pytest.raises(TypeError):
-        board.add_item("PVT_x", ids.IssueId(3527190001))
+        board.add_item("PVT_x", "I_kwDOAbc123")
 
 
 def test_missing_project_scope_is_reported_plainly(fake_gh, monkeypatch):

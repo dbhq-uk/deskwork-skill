@@ -1,3 +1,4 @@
+import json
 import pathlib
 import subprocess
 import sys
@@ -42,14 +43,14 @@ def test_no_module_can_close_or_delete_an_issue():
         "'state': 'closed'",
         "issue close",
         "issue delete",
-        'method="DELETE"',  # permitted only in deps.py, checked below
+        'method="DELETE"',
+        "closeIssue(",
+        "deleteIssue(",
     )
     scripts = SCRIPT.parent
     for path in sorted(scripts.glob("*.py")):
         source = path.read_text()
         for pattern in banned:
-            if pattern == 'method="DELETE"' and path.name == "deps.py":
-                continue  # removing a dependency link is allowed and gated
             assert pattern not in source, f"{path.name} can close or delete: {pattern}"
 
 
@@ -241,8 +242,8 @@ def test_a_real_mode_runs_from_a_subdirectory_of_a_worktree(opted_in, tmp_path, 
     deep.mkdir()
     fake_gh({
         **REPO_VIEW,
-        "api repos/owner/repo/issues --paginate --slurp": {"stdout": "[[]]"},
-        "api graphql --input -": {"stdout": '{"data": {"node": {"items": {"nodes": []}}}}'},
+        "api graphql --input -": {"stdout": json.dumps({"data": {"repository": {"issues": {
+            "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": []}}}})},
     })
     result = run(["roadmap", "--dry-run"], deep)
     assert result.returncode == 0, result.stderr

@@ -135,8 +135,16 @@ def test_delete_through_extra_args_is_refused(recorder, extra):
 
 
 def test_removing_a_dependency_edge_still_works(recorder):
-    gh.api("repos/owner/repo/issues/144/dependencies/blocked_by/3527190001", method="DELETE")
-    assert recorder.calls[0]["argv"][:3] == ["gh", "api", "repos/owner/repo/issues/144/dependencies/blocked_by/3527190001"]
+    gh.run(["issue", "edit", "144", "-R", "owner/repo", "--remove-blocked-by", "143"], write=True)
+    assert recorder.calls[0]["argv"][:3] == ["gh", "issue", "edit"]
+
+
+def test_delete_is_refused_even_on_the_old_dependency_path(recorder):
+    # The REST dependencies API took a database id. deskwork no longer uses it,
+    # so its DELETE is refused like any other.
+    with pytest.raises(gh.Refused):
+        gh.api("repos/owner/repo/issues/144/dependencies/blocked_by/3527190001", method="DELETE")
+    assert recorder.calls == []
 
 
 def test_ordinary_writes_still_pass(recorder):
