@@ -179,14 +179,14 @@ python3 -m pytest skills/deskwork/tests -q
 
 The fixtures deliberately include the cases most likely to produce plausible wrong answers: a cross-repository dependency edge, an issue blocking three others, an issue whose blocker has closed, a Triage issue that is also blocked, a cycle in the graph, and a link that GitHub reports as written but that landed on a different issue.
 
-**Honesty note:** No mode has ever been run against a live GitHub Project, because the `project` token scope is not granted on this machine. The logic is tested; the wiring against a real Projects v2 board is not. The code is there, the patterns are sound, but a first deployment should begin with `init` on a test repository and a human watching the board.
+**Honesty note:** No mode has yet been run against a live Projects v2 board. Every mode is tested against the fake `gh`; none has had a supervised run on a real repository and board. A first deployment should begin with `init` on a test repository and a human watching the board.
 
 ## What it does not do
 
 - **It does not close issues.** A pull request can carry `Closes #N`; GitHub closes it when a human merges.
-- **It does not merge.** It may propose a merge order; a human merges.
+- **It does not touch pull requests.** It neither merges nor proposes a merge order. [`buildwork`](https://github.com/dbhq-uk/buildwork-skill) proposes one; a human merges.
 - **It does not infer dependency edges.** An edge exists because it was proposed and accepted. The reasoning is recorded with it.
-- **It does not write credentials.** `gh auth` is the credential. Nothing in this repository or in `~/.dbhq/deskwork/` leaks.
+- **It holds no credentials.** `gh auth` is the credential. deskwork stores no token and keeps no `~/.dbhq/deskwork/`, so there is nothing of its own to leak.
 - **It does not run on a schedule.** Every pass is on demand.
 
 ## Constraints
@@ -198,10 +198,6 @@ Eight things that must not break. See [AGENTS.md](AGENTS.md).
 deskwork decides what the work is and what order it goes in. [`buildwork`](https://github.com/dbhq-uk/buildwork-skill) runs it - one agent per issue, each in its own worktree, collecting the results and proposing a merge order.
 
 Neither needs the other. buildwork reads issues and a roadmap file whoever wrote them, and falls back to open issues in no particular order while saying so.
-
-## Design
-
-The full design is in [`docs/superpowers/specs/2026-09-17-deskwork-design.md`](../docs/superpowers/specs/2026-09-17-deskwork-design.md), with decisions taken, prior art considered, and open items.
 
 ## Also from DBHQ
 
