@@ -10,7 +10,7 @@ You file side issues without stopping the task, link design files to the issues 
 Before anything:
 
 ```bash
-python3 "$CLAUDE_SKILL_DIR/scripts/deskwork.py" doctor
+python3 "${CLAUDE_SKILL_DIR}/scripts/deskwork.py" doctor
 ```
 
 No `.github/deskwork.toml`, or no `enabled = true` in it, means this repository has not opted in. Say so and stop. Offer `init` if they want one.
@@ -20,7 +20,7 @@ No `.github/deskwork.toml`, or no `enabled = true` in it, means this repository 
 ### capture - file a new issue
 
 ```bash
-python3 "$CLAUDE_SKILL_DIR/scripts/deskwork.py" capture --repo . --title "Title goes here" --type Task --area infra
+python3 "${CLAUDE_SKILL_DIR}/scripts/deskwork.py" capture --repo . --title "Title goes here" --type Task --area infra
 ```
 
 The issue type (`Bug`, `Feature`, `Task`) is optional; it defaults to `Task`. The area is one of your configured area labels; it is optional.
@@ -44,7 +44,7 @@ The created issue lands on the board in Triage status. Never assigned. Never pri
 ### review - reconcile the dependency graph
 
 ```bash
-python3 "$CLAUDE_SKILL_DIR/scripts/deskwork.py" review --repo .
+python3 "${CLAUDE_SKILL_DIR}/scripts/deskwork.py" review --repo .
 ```
 
 This reads every open issue and its links and reports the graph. The script gathers and presents; the agent reasons about what should block what; you (the human) approve or reject; the script writes only after approval.
@@ -80,7 +80,7 @@ Reject a proposed edge and it is not proposed again. Reject a removal and the ed
 ### roadmap - render the roadmap
 
 ```bash
-python3 "$CLAUDE_SKILL_DIR/scripts/deskwork.py" roadmap --repo .
+python3 "${CLAUDE_SKILL_DIR}/scripts/deskwork.py" roadmap --repo .
 ```
 
 Builds the dependency graph and renders `roadmap.md` in the repository root, then commits it. The roadmap shows what is ready to start, what is blocked, and what is still in Triage (not yet reasoned). Order is reasoned, not computed. Every dependency shown is a declared GitHub link.
@@ -90,7 +90,7 @@ Items in Triage are listed but never ordered. Nothing filed unreviewed enters th
 ### init - set up labels, fields and board
 
 ```bash
-python3 "$CLAUDE_SKILL_DIR/scripts/deskwork.py" init --repo .
+python3 "${CLAUDE_SKILL_DIR}/scripts/deskwork.py" init --repo .
 ```
 
 Creates the declared labels, fields and statuses on the board. Idempotent - safe to re-run after a config change. This is how a new repository is onboarded in one command.
@@ -98,7 +98,7 @@ Creates the declared labels, fields and statuses on the board. Idempotent - safe
 ### intake - add existing issues to the board
 
 ```bash
-python3 "$CLAUDE_SKILL_DIR/scripts/deskwork.py" intake --repo .
+python3 "${CLAUDE_SKILL_DIR}/scripts/deskwork.py" intake --repo .
 ```
 
 Bulk-adds existing issues that are not yet on the board. Needed once per repository for repositories with prior history.
@@ -106,7 +106,7 @@ Bulk-adds existing issues that are not yet on the board. Needed once per reposit
 ### doctor - report board drift
 
 ```bash
-python3 "$CLAUDE_SKILL_DIR/scripts/deskwork.py" doctor --repo .
+python3 "${CLAUDE_SKILL_DIR}/scripts/deskwork.py" doctor --repo .
 ```
 
 Reports drift: issues missing a required field, issues absent from the board, labels present in the repo but not in the config, and the reverse. Board drift is invisible until somebody looks.

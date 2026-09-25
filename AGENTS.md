@@ -90,7 +90,9 @@ Anybody changing code that touches GitHub edges needs this on the page before th
 ## Conventions
 
 - Any path `SKILL.md` names goes through `${CLAUDE_SKILL_DIR}`, which Claude
-  Code substitutes for personal, project and plugin installs alike. **Never
+  Code substitutes for personal, project and plugin installs alike. Always
+  with the braces: Claude Code substitutes only that form, and CI fails on
+  the unbraced one. **Never
   hardcode `~/.claude/skills/deskwork` or any absolute path** - it is wrong
   under a Codex install and wrong under a plugin install. `install-codex.sh`
   rewrites the variable at install time because Codex does not substitute it.
@@ -124,7 +126,7 @@ bash -n install.sh install-codex.sh
 jq empty .claude-plugin/plugin.json
 python3 -m pytest skills/deskwork/tests -q
 grep -rInP '[\x{2014}\x{2013}]' --include='*.md' --include='*.py' --include='*.sh' . && echo "FAIL: dash found" || echo "clean"
-grep -rn 'CLAUDE_SKILL_DIR' skills/deskwork/SKILL.md | head -3
+grep -rnF '$CLAUDE_SKILL_DIR' skills/ && echo "FAIL: unbraced" || echo "braced"
 grep -rn '/home/\|~/.claude/skills' skills/deskwork/SKILL.md && echo "FAIL: hardcoded path" || echo "no hardcoded paths"
 ```
 
