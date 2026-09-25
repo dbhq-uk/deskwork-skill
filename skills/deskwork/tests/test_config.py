@@ -142,3 +142,19 @@ def test_the_starter_never_overwrites(tmp_path):
     write(tmp_path, GOOD)
     with pytest.raises(config.ConfigError):
         config.write_starter(tmp_path)
+
+
+@pytest.mark.parametrize("key", ["roadmap", "designs"])
+@pytest.mark.parametrize("value", ["../outside.md", "/tmp/outside.md", "docs/../../outside.md"])
+def test_a_path_outside_the_repository_is_a_config_error(tmp_path, key, value):
+    text = GOOD.replace(f'{key} = "', f'{key} = "{value}" # was "', 1)
+    root = tmp_path / "repo"
+    root.mkdir()
+    with pytest.raises(config.ConfigError) as caught:
+        config.load(write(root, text))
+    assert key in str(caught.value) and "inside the repository" in str(caught.value)
+
+
+def test_a_path_inside_the_repository_is_kept_as_written(tmp_path):
+    text = GOOD.replace('roadmap = "roadmap.md"', 'roadmap = "docs/../plans/roadmap.md"')
+    assert config.load(write(tmp_path, text)).roadmap == "docs/../plans/roadmap.md"

@@ -101,6 +101,16 @@ def load(repo_root):
     for key in ("designs", "roadmap"):
         if not data.get(key):
             raise ConfigError(f"{CONFIG_PATH}: {key} is required")
+        # roadmap writes to this path. Checked here, before any mode runs,
+        # because a value like "../roadmap.md" or "/tmp/roadmap.md" would
+        # otherwise be written first and found wrong afterwards.
+        value = data[key]
+        if (not isinstance(value, str) or pathlib.PurePath(value).is_absolute()
+                or not (repo_root / value).resolve().is_relative_to(repo_root.resolve())):
+            raise ConfigError(
+                f"{CONFIG_PATH}: {key} must be a path inside the repository, "
+                f"relative to its root. Got {value!r}."
+            )
 
     triage_label = data.get("triage_label", "triage")
     if not isinstance(triage_label, str) or not triage_label.strip():
