@@ -7,7 +7,6 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 
 import deps  # noqa: E402
 import ids  # noqa: E402
-from test_gh import fake_gh  # noqa: E402,F401
 
 REF = ids.Ref("owner", "repo", ids.IssueNumber(144))
 BLOCKER = ids.Ref("owner", "repo", ids.IssueNumber(143))
@@ -20,7 +19,7 @@ CROSS_BLOCKER_JSON = (
 )
 
 
-def test_blocked_by_lists_refs(fake_gh):  # noqa: F811
+def test_blocked_by_lists_refs(fake_gh):
     fake_gh({
         "api repos/owner/repo/issues/144/dependencies/blocked_by":
             {"stdout": f"[{BLOCKER_JSON}]"},
@@ -28,7 +27,7 @@ def test_blocked_by_lists_refs(fake_gh):  # noqa: F811
     assert deps.blocked_by(REF) == [BLOCKER]
 
 
-def test_add_resolves_the_number_to_a_database_id_then_reads_back(fake_gh):  # noqa: F811
+def test_add_resolves_the_number_to_a_database_id_then_reads_back(fake_gh):
     fake_gh({
         "api repos/owner/repo/issues/143": {"stdout": BLOCKER_JSON},
         "api repos/owner/repo/issues/144/dependencies/blocked_by -X POST --input -":
@@ -39,7 +38,7 @@ def test_add_resolves_the_number_to_a_database_id_then_reads_back(fake_gh):  # n
     deps.add_blocked_by(REF, BLOCKER)  # must not raise
 
 
-def test_add_raises_when_the_edge_is_not_there_afterwards(fake_gh):  # noqa: F811
+def test_add_raises_when_the_edge_is_not_there_afterwards(fake_gh):
     fake_gh({
         "api repos/owner/repo/issues/143": {"stdout": BLOCKER_JSON},
         "api repos/owner/repo/issues/144/dependencies/blocked_by -X POST --input -":
@@ -50,7 +49,7 @@ def test_add_raises_when_the_edge_is_not_there_afterwards(fake_gh):  # noqa: F81
         deps.add_blocked_by(REF, BLOCKER)
 
 
-def test_add_resolves_a_cross_repo_blocker_against_its_own_repo(fake_gh):  # noqa: F811
+def test_add_resolves_a_cross_repo_blocker_against_its_own_repo(fake_gh):
     # Canned responses are keyed on the blocker's own repo (other-owner/other-repo).
     # If a future change ever resolved the blocker against ref's repo (owner/repo)
     # instead, that lookup would miss the canned response and fake_gh would exit
@@ -65,7 +64,7 @@ def test_add_resolves_a_cross_repo_blocker_against_its_own_repo(fake_gh):  # noq
     deps.add_blocked_by(REF, CROSS_BLOCKER)  # must not raise
 
 
-def test_blocking_lists_refs(fake_gh):  # noqa: F811
+def test_blocking_lists_refs(fake_gh):
     fake_gh({
         "api repos/owner/repo/issues/144/dependencies/blocking":
             {"stdout": f"[{BLOCKER_JSON}]"},
@@ -73,7 +72,7 @@ def test_blocking_lists_refs(fake_gh):  # noqa: F811
     assert deps.blocking(REF) == [BLOCKER]
 
 
-def test_remove_raises_when_the_edge_is_still_there_afterwards(fake_gh):  # noqa: F811
+def test_remove_raises_when_the_edge_is_still_there_afterwards(fake_gh):
     fake_gh({
         "api repos/owner/repo/issues/143": {"stdout": BLOCKER_JSON},
         "api repos/owner/repo/issues/144/dependencies/blocked_by/3527190001 -X DELETE":
@@ -85,7 +84,7 @@ def test_remove_raises_when_the_edge_is_still_there_afterwards(fake_gh):  # noqa
         deps.remove_blocked_by(REF, BLOCKER)
 
 
-def test_ref_from_issue_raises_loudly_on_unexpected_repository_url_shape(fake_gh):  # noqa: F811
+def test_ref_from_issue_raises_loudly_on_unexpected_repository_url_shape(fake_gh):
     # An extra trailing segment after the repo name used to make rsplit("/", 2)
     # silently pick the wrong two segments as owner/repo. It must now raise
     # instead of returning a plausible-looking but wrong Ref.

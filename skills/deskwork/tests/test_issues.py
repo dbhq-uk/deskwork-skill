@@ -5,15 +5,11 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 
 import ids  # noqa: E402
 import issues  # noqa: E402
-from test_gh import fake_gh  # noqa: E402,F401
 
-TYPES_QUERY = (
-    "api graphql -f query={ organization(login:\"owner\"){ issueTypes(first:20)"
-    "{ nodes{ name isEnabled } } } }"
-)
+TYPES_QUERY = "api graphql --input -"
 
 
-def test_org_issue_types_lists_enabled_names_only(fake_gh):  # noqa: F811
+def test_org_issue_types_lists_enabled_names_only(fake_gh):
     fake_gh({TYPES_QUERY: {"stdout": (
         '{"data":{"organization":{"issueTypes":{"nodes":['
         '{"name":"Task","isEnabled":true},'
@@ -22,7 +18,7 @@ def test_org_issue_types_lists_enabled_names_only(fake_gh):  # noqa: F811
     assert issues.org_issue_types("owner") == ["Task"]
 
 
-def test_search_similar_returns_candidates(fake_gh):  # noqa: F811
+def test_search_similar_returns_candidates(fake_gh):
     fake_gh({
         'api search/issues?q=repo:owner/repo+is:issue+is:open+retry+logic':
             {"stdout": '{"items":[{"number":12,"title":"retry logic drops attempts"}]}'},
@@ -31,7 +27,7 @@ def test_search_similar_returns_candidates(fake_gh):  # noqa: F811
     assert found[0]["number"] == 12
 
 
-def test_search_similar_percent_encodes_punctuation_in_terms(fake_gh):  # noqa: F811
+def test_search_similar_percent_encodes_punctuation_in_terms(fake_gh):
     # "&", "#" and "+" all mean something in a URL - unescaped, "&" starts a
     # new query parameter, "#" truncates the rest as a fragment, and "+"
     # reads as an extra encoded space. A title carrying any of them must not
@@ -45,7 +41,7 @@ def test_search_similar_percent_encodes_punctuation_in_terms(fake_gh):  # noqa: 
     assert found == []
 
 
-def test_search_similar_keeps_short_distinctive_words_and_drops_stop_words(fake_gh):  # noqa: F811
+def test_search_similar_keeps_short_distinctive_words_and_drops_stop_words(fake_gh):
     # "CSP" is three characters and the whole reason the title is worth
     # finding; "is", "on" and "the" carry no search signal at any length.
     # A length cutoff keeps this backwards - it would drop "csp" and keep
@@ -58,7 +54,7 @@ def test_search_similar_keeps_short_distinctive_words_and_drops_stop_words(fake_
     assert found[0]["number"] == 7
 
 
-def test_search_similar_falls_back_to_every_word_when_all_are_stop_words(fake_gh):  # noqa: F811
+def test_search_similar_falls_back_to_every_word_when_all_are_stop_words(fake_gh):
     # A title built entirely from stop words must still produce a usable
     # search rather than an empty query string. If the fallback did not
     # fire, the built path would not match this canned response and fake_gh
@@ -71,7 +67,7 @@ def test_search_similar_falls_back_to_every_word_when_all_are_stop_words(fake_gh
     assert found == []
 
 
-def test_create_uses_the_rest_endpoint_because_gh_issue_create_has_no_type(fake_gh):  # noqa: F811
+def test_create_uses_the_rest_endpoint_because_gh_issue_create_has_no_type(fake_gh):
     fake_gh({
         "api repos/owner/repo/issues -X POST --input -":
             {"stdout": '{"number": 145, "id": 999}'},
@@ -143,7 +139,7 @@ def test_body_for_marks_a_missing_section_as_not_stated():
     assert "_not stated_" in body
 
 
-def test_list_open_filters_out_pull_requests(fake_gh):  # noqa: F811
+def test_list_open_filters_out_pull_requests(fake_gh):
     fake_gh({
         "api repos/owner/repo/issues --paginate --slurp":
             {"stdout": '[[{"number":1,"title":"Issue 1","state":"open",'
@@ -160,7 +156,7 @@ def test_list_open_filters_out_pull_requests(fake_gh):  # noqa: F811
     assert all("pull_request" not in issue for issue in found)
 
 
-def test_list_open_handles_pagination(fake_gh):  # noqa: F811
+def test_list_open_handles_pagination(fake_gh):
     # Pagination returns multiple pages as separate arrays within the outer array
     fake_gh({
         "api repos/owner/repo/issues --paginate --slurp":
@@ -175,7 +171,7 @@ def test_list_open_handles_pagination(fake_gh):  # noqa: F811
     assert found[1]["number"] == 2
 
 
-def test_list_open_returns_empty_list_when_no_issues(fake_gh):  # noqa: F811
+def test_list_open_returns_empty_list_when_no_issues(fake_gh):
     fake_gh({
         "api repos/owner/repo/issues --paginate --slurp":
             {"stdout": '[]'},
@@ -184,7 +180,7 @@ def test_list_open_returns_empty_list_when_no_issues(fake_gh):  # noqa: F811
     assert found == []
 
 
-def test_ensure_label_creates_label_if_not_present(fake_gh):  # noqa: F811
+def test_ensure_label_creates_label_if_not_present(fake_gh):
     fake_gh({
         "api repos/owner/repo/labels/area%3Ainfra":
             {"exit": 1, "stdout": ""},  # Label does not exist
@@ -195,7 +191,7 @@ def test_ensure_label_creates_label_if_not_present(fake_gh):  # noqa: F811
     assert created is True
 
 
-def test_ensure_label_does_not_update_existing_label(fake_gh):  # noqa: F811
+def test_ensure_label_does_not_update_existing_label(fake_gh):
     fake_gh({
         "api repos/owner/repo/labels/area%3Ainfra":
             {"stdout": '{"name":"area:infra","color":"FF0000"}'},
