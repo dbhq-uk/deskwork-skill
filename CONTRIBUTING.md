@@ -4,14 +4,14 @@ Thanks for your interest - contributions are welcome.
 
 ## Ways to help
 
-- Report a bug or request a feature via [issues](https://github.com/dbhq-uk/deskwork/issues)
+- Report a bug or request a feature via [issues](https://github.com/dbhq-uk/deskwork-skill/issues)
 - Sharpen the skill's instructions or improve an error message via a pull request
 
 ## Local development
 
 ```bash
-git clone https://github.com/dbhq-uk/deskwork.git
-cd deskwork
+git clone https://github.com/dbhq-uk/deskwork-skill.git
+cd deskwork-skill
 python3 -m pytest skills/deskwork/tests -q
 ```
 
@@ -32,9 +32,9 @@ stops on headings.
 There is no `requirements.txt` and no venv, which is why there is nothing to
 keep patched.
 
-**A real ticket id, hostname, IP address or organisation.** CI greps for them.
-Every example in the docs is generic (`owner/repo`, `#123`) and should stay
-that way.
+**A real ticket id, hostname, IP address or organisation.** CI greps the
+markdown for the ticket-id shape, and review catches the rest. Every example in
+the docs is generic (`owner/repo`, `#123`) and should stay that way.
 
 ## Code of conduct
 

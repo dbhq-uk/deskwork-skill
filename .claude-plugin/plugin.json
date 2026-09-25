@@ -2,6 +2,6 @@
   "name": "deskwork",
   "description": "File what an agent notices as a tracked GitHub issue, reconcile the dependency graph, and keep a roadmap in git",
   "author": {"name": "DBHQ", "url": "https://dbhq.uk"},
-  "homepage": "https://github.com/dbhq-uk/deskwork",
+  "homepage": "https://github.com/dbhq-uk/deskwork-skill",
   "license": "MIT"
 }

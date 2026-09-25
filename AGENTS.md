@@ -24,7 +24,6 @@ skills/deskwork/scripts/            # Python, standard library only
 skills/deskwork/tests/              # pytest, no network, no token, no agent;
                                     #   fake_github.py is the fake gh the modes run against
 install.sh / install-codex.sh       # local symlink installers
-docs/superpowers/specs/             # the dated design record
 ```
 
 ## The constraints that must not be broken
@@ -32,12 +31,12 @@ docs/superpowers/specs/             # the dated design record
 Everything else here is a preference. These are not.
 
 **1. It never closes and never deletes an issue.** No close verb, no delete verb,
-no bulk transition. Issues still get closed: `capture` may add `Closes #N` to a
-pull request body, and GitHub closes the issue on merge, after a human has
-reviewed the work. The skill needs no close verb at all, which is what makes the
-constraint hold itself rather than depend on restraint. `gh.py` also refuses,
-before `gh` starts, any call that would close, delete or transfer an issue:
-`gh issue close|delete|transfer`, a `closeIssue`, `deleteIssue`,
+no bulk transition, and deskwork never touches a pull request. Issues still get
+closed: a pull request a person writes can carry `Closes #N`, and GitHub closes
+the issue when a human merges it. The skill needs no close verb at all, which is
+what makes the constraint hold itself rather than depend on restraint. `gh.py`
+also refuses, before `gh` starts, any call that would close, delete or transfer
+an issue: `gh issue close|delete|transfer`, a `closeIssue`, `deleteIssue`,
 `transferIssue` or `updateIssue` mutation, a write to an issue carrying
 `state`, and any `DELETE`.
 
@@ -116,9 +115,10 @@ Anybody changing code that touches GitHub edges needs this on the page before th
   demand.
 - House style: British English, plain hyphens, **no em dashes** - CI fails on
   them. No trailing full stops on headings.
-- Every example is generic: `owner/repo`, `#143`, `PVT_kwDOABCD1234`. CI greps
-  for anything resembling a real ticket id, hostname, IP address or
-  organisation.
+- Every example is generic: `owner/repo`, `#143`, `PVT_kwDOABCD1234`, never a
+  real ticket id, hostname, IP address or organisation. CI greps the markdown
+  for the shape of a ticket id, three or more capitals, a hyphen and three or
+  more digits. Review catches the rest.
 
 ## Modules
 
@@ -169,7 +169,9 @@ grep -rnIF '$CLAUDE_SKILL_DIR' skills/ && echo "FAIL: unbraced" || echo "braced"
 grep -rn '/home/\|~/.claude/skills' skills/deskwork/SKILL.md && echo "FAIL: hardcoded path" || echo "no hardcoded paths"
 ```
 
-All must pass. CI runs those plus the two prose checks.
+All must pass. CI runs the tests, the dash and brace checks, the ticket-id
+grep, a check that `plugin.json` carries no `version`, `shellcheck -S warning`
+and `ruff --select E9,F`.
 
 The tests are worth more than they look. A graph bug does not crash - it returns
 a confident wrong order. So the fixtures deliberately include cases that would
