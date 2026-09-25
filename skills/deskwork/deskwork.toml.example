@@ -1,7 +1,8 @@
 # deskwork does nothing in this repository until enabled is true.
 enabled = false
 
-# Where roadmap.md is written, relative to the repository root.
+# Where roadmap.md is written, relative to the repository root. A path outside
+# the repository is refused.
 roadmap = "roadmap.md"
 
 # Where designs live. An issue links to a file here rather than carrying the design.

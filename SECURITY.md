@@ -55,7 +55,8 @@ nothing on a board.
   always with `enabled = false`.
 - The roadmap file the config names, from `roadmap`, committed alone in a local
   commit. The commit is checked afterwards to hold that one file. Nothing is
-  pushed.
+  pushed. A `roadmap` or `designs` path that is absolute or leads outside the
+  repository is refused when the config is read, before anything is written.
 
 `--dry-run` on any mode that writes prints what it would do and writes nothing.
 

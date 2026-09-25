@@ -167,3 +167,15 @@ def test_run_from_a_worktree_subdirectory_it_commits_at_the_worktree_root(projec
     assert result.returncode == 0, result.stderr
     assert (worktree / "roadmap.md").exists()
     assert git(worktree, "log", "-1", "--name-only", "--format=").split() == ["roadmap.md"]
+
+
+def test_roadmap_never_writes_outside_the_repository(project, github, tmp_path):
+    _board(github)
+    toml = project / ".github" / "deskwork.toml"
+    toml.write_text(toml.read_text().replace('roadmap = "roadmap.md"', 'roadmap = "../outside.md"'))
+    order = tmp_path / "order.json"
+    order.write_text(json.dumps([{"ref": "#7", "reason": "Unblocks the migration."}]))
+    result = deskwork("roadmap", "--order", str(order), cwd=project)
+    assert result.returncode == 3, result.stderr
+    assert "inside the repository" in result.stderr
+    assert not (project.parent / "outside.md").exists()
