@@ -23,6 +23,15 @@ jobs:
           if grep -rInP '[\x{2014}\x{2013}]' --include='*.md' --include='*.py' .; then
             echo "em or en dash found"; exit 1
           fi
+      # Claude Code substitutes only the braced form in skill content, and does
+      # not set the variable in the shell. An unbraced use runs as
+      # "/scripts/deskwork.py" and every documented command fails. Scoped to
+      # skills/ because install-codex.sh matches the unbraced form on purpose.
+      - name: CLAUDE_SKILL_DIR is braced
+        run: |
+          if grep -rnIF '$CLAUDE_SKILL_DIR' skills/; then
+            echo 'write ${CLAUDE_SKILL_DIR} with braces - Claude Code only substitutes that form'; exit 1
+          fi
       - name: no real identifiers in examples
         run: |
           if grep -rInE '[A-Z]{3,}-[0-9]{3,}' --include='*.md' .; then
