@@ -1,6 +1,6 @@
 ---
 name: deskwork
-description: File what an agent notices as a tracked GitHub issue, reconcile the dependency graph, and keep a roadmap in git. Trigger on phrases like "file that", "raise an issue", "what's queued", "what should we do next", "refresh the roadmap", "check dependencies", "what's blocking this".
+description: File what an agent notices as a tracked GitHub issue, reconcile the dependency graph, and keep a roadmap in git. Trigger on phrases like "deskwork", "file an issue for that", "log that as an issue", "raise a GitHub issue", "track that as an issue", "what's blocking this issue", "reconcile the dependency graph", "refresh the roadmap".
 ---
 
 # deskwork - turn what an agent notices into tracked work
