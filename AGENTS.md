@@ -19,7 +19,7 @@ runs the work; deskwork decides what the work is and what order it goes in.
 .claude-plugin/plugin.json          # plugin manifest
 skills/deskwork/SKILL.md            # the skill (agent-facing instructions)
 skills/deskwork/deskwork.toml.example  # the starter init writes, switched off
-skills/deskwork/references/         # issue shapes, Projects v2, config format
+skills/deskwork/references/         # issue shape, the graph and roadmap, boards (agent-facing)
 skills/deskwork/scripts/            # Python, standard library only
 skills/deskwork/tests/              # pytest, no network, no token, no agent;
                                     #   fake_github.py is the fake gh the modes run against
@@ -119,6 +119,26 @@ Anybody changing code that touches GitHub edges needs this on the page before th
 - Every example is generic: `owner/repo`, `#143`, `PVT_kwDOABCD1234`. CI greps
   for anything resembling a real ticket id, hostname, IP address or
   organisation.
+
+## Modules
+
+The developer's map. The references are written for the agent, which drives
+the CLI, so they do not describe these.
+
+| Module | Holds |
+|---|---|
+| `deskwork.py` | the CLI: argument parsing, the gate, one function per mode |
+| `config.py` | loading `.github/deskwork.toml`, and writing the starter |
+| `repo.py` | the repository root from git, and `owner/repo` from `origin` via gh |
+| `gh.py` | every `gh` call, the version floor, and the never-close guard |
+| `git.py` | every `git` call |
+| `ids.py` | `Ref`, `IssueNumber`, `NodeId` and `ItemId`, with their guards |
+| `issues.py` | filing, body checks, duplicate candidates, labels, and the one-query graph read |
+| `deps.py` | writing and removing edges with `gh issue edit`, and reading them back |
+| `memory.py` | the `<!-- deskwork -->` decision comment |
+| `graph.py` | cycles and bottlenecks |
+| `roadmap.py` | checking the agent's order, and rendering `roadmap.md` |
+| `board.py` | the optional Projects v2 board |
 
 ## Where the logic lives
 
