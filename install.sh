@@ -76,4 +76,4 @@ echo "deskwork does nothing until a repository opts in. In a repo you want it on
 echo "  python3 $target/scripts/deskwork.py init"
 echo "then set enabled = true in .github/deskwork.toml."
 echo
-echo "Then try: 'file that', 'what's queued', or 'refresh the roadmap'"
+echo "Then try: 'file an issue for that', 'reconcile the dependency graph', or 'refresh the roadmap'"
