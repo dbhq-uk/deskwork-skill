@@ -19,7 +19,7 @@ One GitHub issue carries several identifiers and none of them is interchangeable
 
 Dependency edges go through `gh issue edit --add-blocked-by` and `--remove-blocked-by`, which take the issue number and resolve it inside gh. The REST dependencies API takes a database id, links a different issue when handed a number, and still returns 201, so deskwork never calls it.
 
-Setting Status wants the project item id that adding the issue returned, not the issue's node id. Sending the node id fails after the issue already exists, which is how a retry used to file the same issue twice. deskwork keeps the item id, and checks the Status it set by reading it back.
+Setting Status wants the project item id that adding the issue returned, not the issue's node id. Sending the node id fails after the issue already exists, and a retry would then file the issue twice. deskwork keeps the item id, and checks the Status it set by reading it back.
 
 ## A board is addressed by node id
 
@@ -38,7 +38,7 @@ missing. GitHub replaces the whole option list on that update, so init sends
 every existing option back with its id, colour and description, read
 immediately before, and afterwards checks that every one of them is still
 there. No item loses its status. deskwork creates no other fields; Effort and
-Risk are GitHub issue fields now, set on the issue rather than on a board.
+Risk are GitHub issue fields, set on the issue rather than on a board.
 
 ## The project scope
 
