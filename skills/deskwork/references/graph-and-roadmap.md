@@ -72,8 +72,9 @@ not something the script computes. Write it as a JSON list, first thing first:
 Then `roadmap --order order.json`, or `--order -` to read it from stdin.
 The whole order is refused, each problem named, if any entry is closed, in
 Triage, blocked by an open issue, in another repository, listed twice, or has
-no reason. Otherwise `roadmap.md` is written at the repository root and
-committed on its own, with nothing else that happens to be staged.
+no reason. Otherwise the roadmap is written to the config's `roadmap` path
+(default `roadmap.md` at the repository root) and committed on its own,
+with nothing else that happens to be staged.
 
 The file's sections:
 
