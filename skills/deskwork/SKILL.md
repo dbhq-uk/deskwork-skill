@@ -70,7 +70,7 @@ Never propose adding an edge remembered as `rejected` or `unlinked`, or removing
 python3 "${CLAUDE_SKILL_DIR}/scripts/deskwork.py" roadmap --order order.json
 ```
 
-`order.json` is your reasoned order, first thing first: `[{"ref": "#7", "reason": "Unblocks the migration"}, ...]`. An entry that is closed, in Triage, blocked, in another repository, repeated or without a reason gets the whole order refused, by name. Otherwise it writes `roadmap.md` with the reason under each item and commits that file alone. `--dry-run` previews, with or without an order. buildwork runs what is under `## Next`.
+`order.json` is your reasoned order, first thing first: `[{"ref": "#7", "reason": "Unblocks the migration"}, ...]`. An entry that is closed, in Triage, blocked, in another repository, repeated or without a reason gets the whole order refused, by name. Otherwise it writes the roadmap file (the config's `roadmap` path, default `roadmap.md`) with the reason under each item and commits that file alone. `--dry-run` previews, with or without an order. buildwork runs what is under `## Next`.
 
 ## init, intake, doctor
 

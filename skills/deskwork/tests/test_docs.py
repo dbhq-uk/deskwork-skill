@@ -87,10 +87,12 @@ NEIGHBOUR_DESCRIPTIONS = {
     ),
     "life-manager": (
         "Set up and run a Trello board that actually gets things done - capture ideas, "
-        "triage them into a working queue, and coach the user through what has stalled. "
-        "Three modes - setup, triage, coach. Trigger on phrases like \"set up my life "
-        "board\", \"help me get stuff done\", \"sort my inbox\", \"what should I do next\", "
-        "\"I'm stuck\", \"nothing is moving\", \"life manager\", \"manage my todo board\"."
+        "triage them into a working queue, and coach the user through what has stalled "
+        "on it. Three modes - setup, triage, coach. Trigger on phrases like \"set up my "
+        "life board\", \"triage my trello inbox\", \"what should I do next on my board\", "
+        "\"nothing is moving on my board\", \"help me get my board moving\", \"life "
+        "manager\", \"manage my todo board\". Not for general decisions or planning that "
+        "does not involve a Trello board."
     ),
 }
 
